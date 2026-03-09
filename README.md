@@ -87,6 +87,6 @@ The solver finds a provably optimal lineup in under a second.
 ```
 main.py              Optimizer (API client, solvers, CLI)
 pyproject.toml       Dependencies and project metadata
-src/matlab/          MATLAB reference implementations
+ref/                 MATLAB reference implementations
 doc/                 Background material
 ```
