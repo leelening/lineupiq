@@ -36,7 +36,7 @@ for i=1:length(CPT)
     temp_UTIL_f = UTIL_f(UTIL~=CPT(i));
     Players = [CPT(i), temp_UTIL]; % Players
     s = [CPT_s(i), temp_UTIL_s]; % Salary
-    f = [CPT_f(i), temp_UTIL_f]; % FPPG
+    f = [1.5 * CPT_f(i), temp_UTIL_f]; % FPPG (1.5x for captain)
     [m, n] = size(Players);
 
     UTIL_index = 1 + 1:1 + length(temp_UTIL);
@@ -85,7 +85,7 @@ temp_UTIL_s = UTIL_s(UTIL~=cpt_player);
 temp_UTIL_f = UTIL_f(UTIL~=cpt_player);
 Players = [cpt_player, temp_UTIL]; % Players
 s = [CPT_s(CPT==cpt_player), temp_UTIL_s]; % Salary
-f = [CPT_f(CPT==cpt_player), temp_UTIL_f]; % FPPG
+f = [1.5 * CPT_f(CPT==cpt_player), temp_UTIL_f]; % FPPG (1.5x for captain)
 [m, n] = size(Players);
 
 UTIL_index = 1 + 1:1 + length(temp_UTIL);

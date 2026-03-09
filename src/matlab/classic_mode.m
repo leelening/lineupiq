@@ -61,7 +61,7 @@ f = [PG_f, SG_f, SF_f, PF_f, C_f]; % FPPG
 [m, n] = size(Players);
 
 PG_index = 1:length(PG);
-SG_index = length(PG)+1:length(PG) + length(SF);
+SG_index = length(PG)+1:length(PG) + length(SG);
 G_index = 1:length(G);
 
 
