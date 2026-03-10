@@ -423,7 +423,7 @@ def classic_solution(df):
 
 # ── History tracking ────────────────────────────────────────────────────────
 
-HISTORY_DIR = Path.home() / ".lineupiq"
+HISTORY_DIR = Path(__file__).resolve().parent
 HISTORY_FILE = HISTORY_DIR / "history.csv"
 HISTORY_COLUMNS = [
     "date", "mode", "draft_group", "role", "name", "team",
@@ -432,26 +432,40 @@ HISTORY_COLUMNS = [
 
 
 def _save_lineup(lineup_rows, mode, draft_group_id, game_date):
-    """Append lineup rows to history.csv. Each row is a dict with role, name, team, salary, fppg."""
-    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    write_header = not HISTORY_FILE.exists()
-    with open(HISTORY_FILE, "a", newline="") as f:
+    """Save lineup to history.csv, replacing any existing entry for the same date + draft_group."""
+
+    new_rows = [
+        {
+            "date": game_date,
+            "mode": mode,
+            "draft_group": str(draft_group_id),
+            "role": row["role"],
+            "name": row["name"],
+            "team": row["team"],
+            "salary": row["salary"],
+            "projected_fppg": row["projected_fppg"],
+            "actual_fppg": "",
+        }
+        for row in lineup_rows
+    ]
+
+    existing = []
+    if HISTORY_FILE.exists():
+        existing = pd.read_csv(HISTORY_FILE, dtype=str).fillna("").to_dict("records")
+
+    kept = [
+        r for r in existing
+        if not (r["date"] == game_date and r["draft_group"] == str(draft_group_id))
+    ]
+    replaced = len(existing) - len(kept)
+
+    with open(HISTORY_FILE, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=HISTORY_COLUMNS)
-        if write_header:
-            writer.writeheader()
-        for row in lineup_rows:
-            writer.writerow({
-                "date": game_date,
-                "mode": mode,
-                "draft_group": draft_group_id,
-                "role": row["role"],
-                "name": row["name"],
-                "team": row["team"],
-                "salary": row["salary"],
-                "projected_fppg": row["projected_fppg"],
-                "actual_fppg": "",
-            })
-    print(f"Lineup saved to {HISTORY_FILE}")
+        writer.writeheader()
+        writer.writerows(kept + new_rows)
+
+    action = "replaced" if replaced else "saved"
+    print(f"Lineup {action} in {HISTORY_FILE}")
 
 
 def _dk_fantasy_points(pts, fg3m, reb, ast, stl, blk, tov):

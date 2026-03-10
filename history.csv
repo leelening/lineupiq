@@ -1,0 +1,27 @@
+date,mode,draft_group,role,name,team,salary,projected_fppg,actual_fppg
+2026-03-09,Captain,143417,Captain,Mikal Bridges,NYK,10800,46.8,38.6
+2026-03-09,Captain,143417,Util,Kawhi Leonard,LAC,10800,46.0,54.2
+2026-03-09,Captain,143417,Util,Jalen Brunson,NYK,10000,41.2,46.5
+2026-03-09,Captain,143417,Util,Karl-Anthony Towns,NYK,9600,41.4,64.0
+2026-03-09,Captain,143417,Util,Darius Garland,LAC,7800,32.6,40.2
+2026-03-09,Captain,143417,Util,Bogdan Bogdanovic,LAC,1000,16.6,
+2026-03-10,Captain,143563,Captain,Luka Doncic,LAL,20400,88.3,
+2026-03-10,Captain,143563,Util,Austin Reaves,LAL,8800,40.3,
+2026-03-10,Captain,143563,Util,Julius Randle,MIN,8400,40.5,
+2026-03-10,Captain,143563,Util,Deandre Ayton,LAL,5400,26.9,
+2026-03-10,Captain,143563,Util,Ayo Dosunmu,MIN,4800,25.3,
+2026-03-10,Captain,143563,Util,Kyle Anderson,MIN,2000,18.0,
+2026-03-10,Classic,143420,PF,Jalen Johnson,ATL,10500,50.7,
+2026-03-10,Classic,143420,SF,Michael Porter Jr.,BKN,8000,41.4,
+2026-03-10,Classic,143420,PG,Ty Jerome,MEM,6900,34.7,
+2026-03-10,Classic,143420,PG,De'Aaron Fox,SAS,6700,34.7,
+2026-03-10,Classic,143420,C,Nic Claxton,BKN,5600,30.7,
+2026-03-10,Classic,143420,SG,Cedric Coward,MEM,5100,27.3,
+2026-03-10,Classic,143420,C,Julian Reese,WAS,4200,27.1,
+2026-03-10,Classic,143420,SG,Marjon Beauchamp,PHI,3000,17.6,
+2026-03-10,Captain,143555,Captain,Ty Jerome,MEM,13200,52.1,
+2026-03-10,Captain,143555,Util,Kelly Oubre Jr.,PHI,9000,26.7,
+2026-03-10,Captain,143555,Util,Quentin Grimes,PHI,8600,25.0,
+2026-03-10,Captain,143555,Util,Cedric Coward,MEM,6600,27.3,
+2026-03-10,Captain,143555,Util,Cam Spencer,MEM,6400,25.2,
+2026-03-10,Captain,143555,Util,Jaylen Wells,MEM,5000,21.7,
