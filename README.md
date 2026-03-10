@@ -6,7 +6,7 @@ Supports **Captain (Showdown)** and **Classic** contest modes. Player data can b
 
 ## Setup
 
-Requires Python 3.12+ and [Gurobi](https://www.gurobi.com/) (a free academic license is available).
+Requires Python 3.12+. Uses [Gurobi](https://www.gurobi.com/) when available (free academic license), otherwise falls back to the bundled CBC solver.
 
 ```bash
 uv sync
@@ -16,7 +16,15 @@ Dependencies (`pandas`, `python-mip`, `tabulate`, `requests`) are declared in `p
 
 ## Usage
 
-### Fetch today's slate from DraftKings and optimize
+### Auto-detect mode and optimize
+
+```bash
+uv run main.py
+```
+
+When `--mode` is omitted, the tool fetches the DraftKings lobby and picks a mode automatically: **Captain** if any Showdown slates exist, otherwise **Classic**.
+
+### Specify a mode
 
 ```bash
 # Captain (Showdown) mode — 1 CPT + 5 UTIL, $50k cap
@@ -26,7 +34,7 @@ uv run main.py --mode Captain
 uv run main.py --mode Classic
 ```
 
-The tool auto-selects the main slate (largest game count). To pick a different draft group:
+The tool auto-selects a slate: for Captain it prefers single-game Showdown, for Classic it picks the largest slate. A direct DraftKings lobby link is printed for the selected slate. To pick a different draft group:
 
 ```bash
 uv run main.py --mode Classic --draft-group 12345
@@ -43,6 +51,14 @@ uv run main.py --mode Classic --roster-file DKSalaries.csv
 ```bash
 uv run main.py --mode Captain --players-out "LeBron James" "Stephen Curry"
 ```
+
+### List available draft groups (debug)
+
+```bash
+uv run main.py --list-draft-groups
+```
+
+Prints all NBA draft groups with their GameTypeId and game count.
 
 ## Contest Modes
 
@@ -74,7 +90,7 @@ Pick 8 players across positions:
 
 ## How It Works
 
-Both modes are formulated as binary integer programs and solved with Gurobi via `python-mip`:
+Both modes are formulated as binary integer programs and solved via `python-mip` (Gurobi when installed, CBC otherwise):
 
 - **Decision variables**: binary (0/1) — whether each player is selected
 - **Objective**: maximize total projected fantasy points (FPPG)
