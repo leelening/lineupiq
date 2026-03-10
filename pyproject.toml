@@ -9,6 +9,7 @@ dependencies = [
     "mip",
     "tabulate",
     "requests",
+    "nba_api",
 ]
 
 [tool.uv]
