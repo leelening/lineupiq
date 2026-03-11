@@ -235,6 +235,18 @@ def _extract_fppg(attrs, fppg_id):
 
 EXCLUDED_STATUSES = {"OUT", "Q"}
 
+OPRK_NEUTRAL = 16
+
+
+def _extract_oprk(attrs):
+    for a in attrs:
+        if a.get("id") == -2:
+            try:
+                return int(a.get("sortValue", OPRK_NEUTRAL))
+            except (ValueError, TypeError):
+                return OPRK_NEUTRAL
+    return OPRK_NEUTRAL
+
 
 def _to_dataframe(draftables, fppg_id, mode):
     # In Captain/Showdown mode, each player appears twice: once for the CPT slot
@@ -256,6 +268,7 @@ def _to_dataframe(draftables, fppg_id, mode):
             "AvgPointsPerGame": _extract_fppg(
                 p.get("draftStatAttributes", []), fppg_id
             ),
+            "OPRK": _extract_oprk(p.get("draftStatAttributes", [])),
             "Roster Position": (
                 "CPT" if (min_salary_by_name and sal > min_salary_by_name.get(name, sal)) else "UTIL"
             ),
@@ -302,12 +315,21 @@ def _picked(variables, threshold=0.99):
 # ── Mode solvers ────────────────────────────────────────────────────────────
 
 
-def captain_solution(df):
+def _oprk_adjusted(fppg, oprk, alpha):
+    """Return OPRK-adjusted FPPG list. Lower OPRK rank = easier matchup = boost."""
+    if alpha == 0:
+        return list(fppg)
+    return [f * (1.0 + alpha * (OPRK_NEUTRAL - o) / 30) for f, o in zip(fppg, oprk)]
+
+
+def captain_solution(df, oprk_weight=0.1):
     df = df[df["Roster Position"] == "UTIL"].drop_duplicates(subset=["Name"]).reset_index(drop=True)
     if df.empty:
         sys.exit("No UTIL players in roster; cannot build Captain lineup.")
     fppg = df["AvgPointsPerGame"].to_list()
     sal = df["Salary"].to_list()
+    oprk = df["OPRK"].to_list()
+    adj = _oprk_adjusted(fppg, oprk, oprk_weight)
     I = range(len(df))
 
     m = _new_model()
@@ -315,8 +337,8 @@ def captain_solution(df):
     c = [m.add_var(var_type=BINARY) for _ in I]
 
     m.objective = (
-        xsum(fppg[i] * u[i] for i in I)
-        + xsum(1.5 * fppg[i] * c[i] for i in I)
+        xsum(adj[i] * u[i] for i in I)
+        + xsum(1.5 * adj[i] * c[i] for i in I)
     )
 
     m += xsum(sal[i] * u[i] + 1.5 * sal[i] * c[i] for i in I) <= SALARY_CAP
@@ -357,7 +379,7 @@ def _has_position(position_str, pos):
     return pos in str(position_str).split("/")
 
 
-def classic_solution(df):
+def classic_solution(df, oprk_weight=0.1):
     df = df.drop_duplicates(subset=["Name"]).reset_index(drop=True)
 
     eligible = {
@@ -383,12 +405,14 @@ def classic_solution(df):
 
     fppg = df["AvgPointsPerGame"].to_list()
     sal = df["Salary"].to_list()
+    oprk = df["OPRK"].to_list()
+    adj = _oprk_adjusted(fppg, oprk, oprk_weight)
     I = range(len(df))
 
     m = _new_model()
     x = [m.add_var(var_type=BINARY) for _ in I]
 
-    m.objective = xsum(fppg[i] * x[i] for i in I)
+    m.objective = xsum(adj[i] * x[i] for i in I)
 
     m += xsum(sal[i] * x[i] for i in I) <= SALARY_CAP
     m += xsum(x[i] for i in I) == 8
@@ -425,18 +449,19 @@ def classic_solution(df):
 HISTORY_DIR = Path(__file__).resolve().parent
 HISTORY_FILE = HISTORY_DIR / "history.csv"
 HISTORY_COLUMNS = [
-    "date", "draft_group", "role", "name", "team",
+    "date", "draft_group", "oprk_weight", "role", "name", "team",
     "salary", "projected_fppg", "actual_fppg",
 ]
 
 
-def _save_lineup(lineup_rows, draft_group_id, game_date):
+def _save_lineup(lineup_rows, draft_group_id, game_date, oprk_weight):
     """Save lineup to history.csv, replacing any existing entry for the same date + draft_group."""
 
     new_rows = [
         {
             "date": game_date,
             "draft_group": str(draft_group_id),
+            "oprk_weight": oprk_weight,
             "role": row["role"],
             "name": row["name"],
             "team": row["team"],
@@ -649,6 +674,8 @@ def main():
                         help="Draft group ID (auto-selected if omitted)")
     parser.add_argument("--players-out", nargs="+", default=[],
                         help="Players to exclude")
+    parser.add_argument("--oprk-weight", type=float, default=0.1,
+                        help="OPRK matchup weight (0 to disable, default 0.1)")
     parser.add_argument("--list-draft-groups", action="store_true",
                         help="Fetch lobby and list all NBA draft groups with GameTypeId (debug)")
     parser.add_argument("--review", action="store_true",
@@ -703,11 +730,11 @@ def main():
     if args.players_out:
         df = df[~df["Name"].isin(args.players_out)].reset_index(drop=True)
 
-    lineup = MODES[args.mode](df)
+    lineup = MODES[args.mode](df, oprk_weight=args.oprk_weight)
 
     if lineup:
         game_date = date.today().isoformat()
-        _save_lineup(lineup, draft_group_id, game_date)
+        _save_lineup(lineup, draft_group_id, game_date, args.oprk_weight)
 
 
 if __name__ == "__main__":
