@@ -2,7 +2,7 @@ import csv
 import sys
 import logging
 import argparse
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import requests
@@ -150,6 +150,18 @@ def _choose_mode_from_lobby(data):
     return None
 
 
+def _mode_for_draft_group(data, draft_group_id):
+    """Look up the mode (Captain/Classic) for a specific draft group ID from lobby data."""
+    for dg in data.get("DraftGroups", []):
+        if dg.get("DraftGroupId") == draft_group_id:
+            gt = dg.get("GameTypeId")
+            for mode, ids in GAME_TYPE_IDS.items():
+                if gt in ids:
+                    return mode
+            return None
+    return None
+
+
 def _pick_draft_group(mode, lobby_data=None):
     data = lobby_data if lobby_data is not None else _api_get(CONTESTS_URL)
     print(f"Fetching NBA {mode} contests from DraftKings ...")
@@ -263,19 +275,6 @@ def _to_dataframe(draftables, fppg_id, mode):
     print(f"Loaded {len(df)} player entries ({total - len(df)} excluded as OUT/Q).")
     return df
 
-
-_COLUMN_ALIASES = {
-    "RosterPosition": "Roster Position",
-    "Roster_Position": "Roster Position",
-    "FPPG": "AvgPointsPerGame",
-    "Avg Pts": "AvgPointsPerGame",
-}
-
-
-def read_roster_csv(path, exclude):
-    df = pd.read_csv(path)
-    df.rename(columns=_COLUMN_ALIASES, inplace=True)
-    return df[~df["Name"].isin(exclude)].reset_index(drop=True)
 
 
 # ── Solver helpers ──────────────────────────────────────────────────────────
@@ -426,18 +425,17 @@ def classic_solution(df):
 HISTORY_DIR = Path(__file__).resolve().parent
 HISTORY_FILE = HISTORY_DIR / "history.csv"
 HISTORY_COLUMNS = [
-    "date", "mode", "draft_group", "role", "name", "team",
+    "date", "draft_group", "role", "name", "team",
     "salary", "projected_fppg", "actual_fppg",
 ]
 
 
-def _save_lineup(lineup_rows, mode, draft_group_id, game_date):
+def _save_lineup(lineup_rows, draft_group_id, game_date):
     """Save lineup to history.csv, replacing any existing entry for the same date + draft_group."""
 
     new_rows = [
         {
             "date": game_date,
-            "mode": mode,
             "draft_group": str(draft_group_id),
             "role": row["role"],
             "name": row["name"],
@@ -529,49 +527,57 @@ def _fetch_box_scores(game_date_str):
     return results
 
 
-def _review_date(target_date_str):
-    """Fetch actual scores and fill them in for a given date in history.csv."""
+def _review():
+    """Fetch actual scores for all pending dates in history.csv."""
     if not HISTORY_FILE.exists():
         sys.exit(f"No history file found at {HISTORY_FILE}")
 
     df = pd.read_csv(HISTORY_FILE, dtype=str).fillna("")
-    mask = (df["date"] == target_date_str) & (df["actual_fppg"] == "")
-    pending = df[mask]
-    if pending.empty:
-        print(f"No pending lineups to review for {target_date_str}.")
+    pending_dates = sorted(df.loc[df["actual_fppg"] == "", "date"].unique())
+    if not pending_dates:
+        print("No pending lineups to review.")
         return
 
-    print(f"Fetching actual scores for {target_date_str} ...")
-    box = _fetch_box_scores(target_date_str)
-    if not box:
-        print("  No box score data returned. Games may not have finished yet.")
-        return
+    total_matched, total_unmatched = 0, 0
+    for target_date_str in pending_dates:
+        mask = (df["date"] == target_date_str) & (df["actual_fppg"] == "")
+        pending = df[mask]
 
-    matched, unmatched = 0, 0
-    for idx in pending.index:
-        name = df.at[idx, "name"]
-        team = _normalize_team(df.at[idx, "team"])
-        role = df.at[idx, "role"]
-        fp = box.get((name, team))
-        if fp is None:
-            for (bname, bteam), bfp in box.items():
-                if bname == name:
-                    fp = bfp
-                    break
-        if fp is not None:
-            if role == "Captain":
-                fp *= 1.5
-            df.at[idx, "actual_fppg"] = f"{fp:.1f}"
-            matched += 1
-        else:
-            unmatched += 1
+        print(f"Fetching actual scores for {target_date_str} ...")
+        box = _fetch_box_scores(target_date_str)
+        if not box:
+            print("  No box score data returned. Games may not have finished yet.")
+            continue
+
+        matched, unmatched = 0, 0
+        for idx in pending.index:
+            name = df.at[idx, "name"]
+            team = _normalize_team(df.at[idx, "team"])
+            role = df.at[idx, "role"]
+            fp = box.get((name, team))
+            if fp is None:
+                for (bname, bteam), bfp in box.items():
+                    if bname == name:
+                        fp = bfp
+                        break
+            if fp is not None:
+                if role == "Captain":
+                    fp *= 1.5
+                df.at[idx, "actual_fppg"] = f"{fp:.1f}"
+                matched += 1
+            else:
+                unmatched += 1
+        print(f"  Updated {matched} players. {unmatched} could not be matched.")
+        total_matched += matched
+        total_unmatched += unmatched
 
     df.to_csv(HISTORY_FILE, index=False)
-    print(f"  Updated {matched} players. {unmatched} could not be matched.")
 
-    filled = df[(df["date"] == target_date_str) & (df["actual_fppg"] != "")]
-    if not filled.empty:
-        _print_review_table(filled)
+    for target_date_str in pending_dates:
+        filled = df[(df["date"] == target_date_str) & (df["actual_fppg"] != "")]
+        if not filled.empty:
+            print(f"\n── {target_date_str} ──")
+            _print_review_table(filled)
 
 
 def _print_review_table(df):
@@ -606,22 +612,22 @@ def _show_stats():
     reviewed["projected_fppg"] = reviewed["projected_fppg"].astype(float)
     reviewed["actual_fppg"] = reviewed["actual_fppg"].astype(float)
 
-    groups = reviewed.groupby(["date", "mode", "draft_group"])
+    groups = reviewed.groupby(["date", "draft_group"])
     table = []
     total_projected, total_actual, n_lineups = 0, 0, 0
     abs_errors = []
-    for (d, mode, dg), grp in groups:
+    for (d, dg), grp in groups:
         proj = grp["projected_fppg"].sum()
         act = grp["actual_fppg"].sum()
         delta = act - proj
         pct = (act / proj * 100) if proj > 0 else 0
-        table.append([d, mode, f"{proj:.1f}", f"{act:.1f}", f"{delta:+.1f}", f"{pct:.0f}%"])
+        table.append([d, dg, f"{proj:.1f}", f"{act:.1f}", f"{delta:+.1f}", f"{pct:.0f}%"])
         total_projected += proj
         total_actual += act
         abs_errors.append(abs(delta))
         n_lineups += 1
 
-    print(tabulate(table, headers=["Date", "Mode", "Projected", "Actual", "Delta", "Accuracy"]))
+    print(tabulate(table, headers=["Date", "Draft Group", "Projected", "Actual", "Delta", "Accuracy"]))
     if n_lineups > 0:
         avg_pct = total_actual / total_projected * 100 if total_projected > 0 else 0
         mae = sum(abs_errors) / n_lineups
@@ -644,14 +650,12 @@ def main():
                         help="Contest mode: Captain or Classic (auto from available games if omitted)")
     parser.add_argument("--draft-group", type=int, default=None,
                         help="Draft group ID (auto-selected if omitted)")
-    parser.add_argument("--roster-file", default=None,
-                        help="Local DKSalaries CSV (fetches from DK if omitted)")
     parser.add_argument("--players-out", nargs="+", default=[],
                         help="Players to exclude")
     parser.add_argument("--list-draft-groups", action="store_true",
                         help="Fetch lobby and list all NBA draft groups with GameTypeId (debug)")
-    parser.add_argument("--review", nargs="?", const="yesterday", metavar="YYYY-MM-DD",
-                        help="Fetch actual scores and update history (defaults to yesterday)")
+    parser.add_argument("--review", action="store_true",
+                        help="Fetch actual scores for all pending dates in history")
     parser.add_argument("--stats", action="store_true",
                         help="Print accuracy summary from lineup history")
     args = parser.parse_args()
@@ -660,12 +664,8 @@ def main():
         _show_stats()
         return
 
-    if args.review is not None:
-        if args.review == "yesterday":
-            target = (date.today() - timedelta(days=1)).isoformat()
-        else:
-            target = args.review
-        _review_date(target)
+    if args.review:
+        _review()
         return
 
     if args.list_draft_groups:
@@ -679,11 +679,21 @@ def main():
         print(f"Unique GameTypeIds in response: {gt_ids}")
         return
 
-    if args.mode is None and args.roster_file:
-        parser.error("--mode is required when using --roster-file")
-
     lobby_data = None
-    if args.mode is None:
+    if args.draft_group is not None:
+        data = _api_get(CONTESTS_URL)
+        lobby_data = data
+        detected_mode = _mode_for_draft_group(data, args.draft_group)
+        if detected_mode is None:
+            sys.exit(f"Draft group {args.draft_group} not found in today's lobby "
+                     "or has an unsupported game type.")
+        if args.mode is not None and args.mode != detected_mode:
+            sys.exit(f"--mode {args.mode} conflicts with draft group {args.draft_group} "
+                     f"which is {detected_mode}.")
+        if args.mode is None:
+            args.mode = detected_mode
+            print(f"Auto-detected mode: {args.mode} (from draft group {args.draft_group})")
+    elif args.mode is None:
         data = _api_get(CONTESTS_URL)
         args.mode = _choose_mode_from_lobby(data)
         if args.mode is None:
@@ -692,18 +702,15 @@ def main():
         lobby_data = data
 
     draft_group_id = args.draft_group
-    if args.roster_file:
-        df = read_roster_csv(args.roster_file, args.players_out)
-    else:
-        df, draft_group_id = fetch_roster(args.mode, draft_group_id, lobby_data=lobby_data)
-        if args.players_out:
-            df = df[~df["Name"].isin(args.players_out)].reset_index(drop=True)
+    df, draft_group_id = fetch_roster(args.mode, draft_group_id, lobby_data=lobby_data)
+    if args.players_out:
+        df = df[~df["Name"].isin(args.players_out)].reset_index(drop=True)
 
     lineup = MODES[args.mode](df)
 
-    if lineup and not args.roster_file:
+    if lineup:
         game_date = date.today().isoformat()
-        _save_lineup(lineup, args.mode, draft_group_id, game_date)
+        _save_lineup(lineup, draft_group_id, game_date)
 
 
 if __name__ == "__main__":
