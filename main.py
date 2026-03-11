@@ -330,7 +330,7 @@ def captain_solution(df):
     cpt_idx = _picked(c)
     util_idx = _picked(u)
     table = [
-        ["Captain", df.at[i, "Name"], f"${1.5 * sal[i]:,.0f}", f"{fppg[i]:.1f}"]
+        ["Captain", df.at[i, "Name"], f"${1.5 * sal[i]:,.0f}", f"{1.5 * fppg[i]:.1f}"]
         for i in cpt_idx
     ] + [
         ["Util", df.at[i, "Name"], f"${sal[i]:,}", f"{fppg[i]:.1f}"]
@@ -538,7 +538,6 @@ def _review():
         print("No pending lineups to review.")
         return
 
-    total_matched, total_unmatched = 0, 0
     for target_date_str in pending_dates:
         mask = (df["date"] == target_date_str) & (df["actual_fppg"] == "")
         pending = df[mask]
@@ -568,8 +567,6 @@ def _review():
             else:
                 unmatched += 1
         print(f"  Updated {matched} players. {unmatched} could not be matched.")
-        total_matched += matched
-        total_unmatched += unmatched
 
     df.to_csv(HISTORY_FILE, index=False)
 
@@ -605,7 +602,7 @@ def _show_stats():
     df = pd.read_csv(HISTORY_FILE, dtype=str).fillna("")
     reviewed = df[df["actual_fppg"] != ""]
     if reviewed.empty:
-        print("No reviewed lineups yet. Run --review <date> after games finish.")
+        print("No reviewed lineups yet. Run --review after games finish.")
         return
 
     reviewed = reviewed.copy()
