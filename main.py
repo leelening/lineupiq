@@ -2,7 +2,8 @@ import csv
 import sys
 import logging
 import argparse
-from datetime import date
+import unicodedata
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -57,11 +58,11 @@ POSITIONS = ["PG", "SG", "SF", "PF", "C"]
 POSITION_CONSTRAINTS = {
     "PG": (1, 2),
     "SG": (1, 2),
-    "G":  (3, 4),
+    "G": (3, 4),
     "SF": (1, 2),
     "PF": (1, 2),
-    "F":  (3, 4),
-    "C":  (1, 2),
+    "F": (3, 4),
+    "C": (1, 2),
 }
 
 COMPOSITE_GROUPS = {
@@ -78,8 +79,43 @@ def _api_get(url):
     return resp.json()
 
 
+"4 or 5 hours does not matter"
+ET = timezone(timedelta(hours=-5))
+
+
+def _competition_date_map(data):
+    """Build a mapping from competitionId -> game date (ET string) from the
+    draftables competitions array.  Also return a fallback date (the most
+    common date, or today if nothing is available)."""
+    comp_dates = {}  # competitionId -> "YYYY-MM-DD"
+    all_dates = []
+    for comp in data.get("competitions", []):
+        start = comp.get("startTime", "")
+        comp_id = comp.get("competitionId")
+        if start:
+            try:
+                utc_dt = datetime.fromisoformat(start.rstrip("Z")).replace(
+                    tzinfo=timezone.utc
+                )
+                d = utc_dt.astimezone(ET).date().isoformat()
+                if comp_id is not None:
+                    comp_dates[comp_id] = d
+                all_dates.append(d)
+            except (ValueError, TypeError):
+                continue
+    # Fallback: most common date, or today.
+    if all_dates:
+        from collections import Counter
+        fallback = Counter(all_dates).most_common(1)[0][0]
+    else:
+        fallback = date.today().isoformat()
+    return comp_dates, fallback
+
+
+
+
 def fetch_roster(mode, draft_group_id=None, lobby_data=None):
-    """Returns (DataFrame, selected_draft_group_id)."""
+    """Returns (DataFrame, selected_draft_group_id, game_date)."""
     draftables_data = None
     if draft_group_id is None:
         draft_group_id, draftables_data = _pick_draft_group(mode, lobby_data)
@@ -92,8 +128,13 @@ def fetch_roster(mode, draft_group_id=None, lobby_data=None):
         data = _api_get(DRAFTABLES_URL.format(group_id=draft_group_id))
         print(f"  Lobby: {LOBBY_DRAFT_GROUP_URL.format(group_id=draft_group_id)}")
 
+    comp_dates, game_date = _competition_date_map(data)
     fppg_id = _fppg_stat_id(data.get("draftStats", []))
-    return _to_dataframe(data.get("draftables", []), fppg_id, mode), draft_group_id
+    return (
+        _to_dataframe(data.get("draftables", []), fppg_id, mode, comp_dates, game_date),
+        draft_group_id,
+        game_date,
+    )
 
 
 def _draft_group_label(dg):
@@ -130,12 +171,16 @@ def _groups_for_mode(data, mode):
         for c in data.get("Contests", []):
             gt = c.get("GameTypeId") or c.get("gt") or c.get("gameTypeId")
             if gt is not None and gt in wanted:
-                dg_ids.add(c.get("dg") or c.get("DraftGroupId") or c.get("draftGroupId"))
+                dg_ids.add(
+                    c.get("dg") or c.get("DraftGroupId") or c.get("draftGroupId")
+                )
         dg_ids.discard(None)
         dg_by_id = {dg["DraftGroupId"]: dg for dg in data.get("DraftGroups", [])}
         groups = [dg_by_id[dg_id] for dg_id in dg_ids if dg_id in dg_by_id]
         if not groups and dg_ids:
-            groups = [{"DraftGroupId": dg_id, "GameCount": 1} for dg_id in sorted(dg_ids)]
+            groups = [
+                {"DraftGroupId": dg_id, "GameCount": 1} for dg_id in sorted(dg_ids)
+            ]
     return groups
 
 
@@ -221,8 +266,10 @@ def _extract_fppg(attrs, fppg_id):
                     return 0.0
     else:
         if not _fppg_fallback_warned:
-            logging.warning("FPPG stat not found in draftStats; "
-                            "using first available sortValue as fallback.")
+            logging.warning(
+                "FPPG stat not found in draftStats; "
+                "using first available sortValue as fallback."
+            )
             _fppg_fallback_warned = True
         for a in attrs:
             if a.get("sortValue") is not None:
@@ -248,7 +295,19 @@ def _extract_oprk(attrs):
     return OPRK_NEUTRAL
 
 
-def _to_dataframe(draftables, fppg_id, mode):
+def _to_dataframe(draftables, fppg_id, mode, comp_dates=None, fallback_date=None):
+    """Convert raw draftables list to a DataFrame.
+
+    comp_dates:    mapping competitionId -> game date string built by
+                   _competition_date_map.
+    fallback_date: single date string used when a player's competition cannot
+                   be resolved.
+    """
+    if comp_dates is None:
+        comp_dates = {}
+    if fallback_date is None:
+        fallback_date = date.today().isoformat()
+
     # In Captain/Showdown mode, each player appears twice: once for the CPT slot
     # (higher salary = 1.5x) and once for UTIL (base salary). Identify CPT entries
     # by finding the minimum salary per player — any entry above that is a CPT entry.
@@ -270,10 +329,13 @@ def _to_dataframe(draftables, fppg_id, mode):
             ),
             "OPRK": _extract_oprk(p.get("draftStatAttributes", [])),
             "Roster Position": (
-                "CPT" if (min_salary_by_name and sal > min_salary_by_name.get(name, sal)) else "UTIL"
+                "CPT"
+                if (min_salary_by_name and sal > min_salary_by_name.get(name, sal))
+                else "UTIL"
             ),
             "TeamAbbrev": p.get("teamAbbreviation", ""),
             "Status": p.get("status", "None"),
+            "GameDate": comp_dates.get(p.get("competitionId"), fallback_date),
         }
         for p in draftables
     ]
@@ -287,7 +349,6 @@ def _to_dataframe(draftables, fppg_id, mode):
         df = df[~df["Status"].isin(EXCLUDED_STATUSES)].reset_index(drop=True)
     print(f"Loaded {len(df)} player entries ({total - len(df)} excluded as OUT/Q).")
     return df
-
 
 
 # ── Solver helpers ──────────────────────────────────────────────────────────
@@ -323,7 +384,11 @@ def _oprk_adjusted(fppg, oprk, alpha):
 
 
 def captain_solution(df, oprk_weight=0.1):
-    df = df[df["Roster Position"] == "UTIL"].drop_duplicates(subset=["Name"]).reset_index(drop=True)
+    df = (
+        df[df["Roster Position"] == "UTIL"]
+        .drop_duplicates(subset=["Name"])
+        .reset_index(drop=True)
+    )
     if df.empty:
         sys.exit("No UTIL players in roster; cannot build Captain lineup.")
     fppg = df["AvgPointsPerGame"].to_list()
@@ -336,10 +401,7 @@ def captain_solution(df, oprk_weight=0.1):
     u = [m.add_var(var_type=BINARY) for _ in I]
     c = [m.add_var(var_type=BINARY) for _ in I]
 
-    m.objective = (
-        xsum(adj[i] * u[i] for i in I)
-        + xsum(1.5 * adj[i] * c[i] for i in I)
-    )
+    m.objective = xsum(adj[i] * u[i] for i in I) + xsum(1.5 * adj[i] * c[i] for i in I)
 
     m += xsum(sal[i] * u[i] + 1.5 * sal[i] * c[i] for i in I) <= SALARY_CAP
     m += xsum(u[i] for i in I) == 5
@@ -354,22 +416,33 @@ def captain_solution(df, oprk_weight=0.1):
     table = [
         ["Captain", df.at[i, "Name"], f"${1.5 * sal[i]:,.0f}", f"{1.5 * fppg[i]:.1f}"]
         for i in cpt_idx
-    ] + [
-        ["Util", df.at[i, "Name"], f"${sal[i]:,}", f"{fppg[i]:.1f}"]
-        for i in util_idx
-    ]
+    ] + [["Util", df.at[i, "Name"], f"${sal[i]:,}", f"{fppg[i]:.1f}"] for i in util_idx]
     total_sal = sum(1.5 * sal[i] for i in cpt_idx) + sum(sal[i] for i in util_idx)
     total_pts = sum(1.5 * fppg[i] for i in cpt_idx) + sum(fppg[i] for i in util_idx)
-    table.append(["", "TOTAL", f"${total_sal:,.0f} / ${SALARY_CAP:,}", f"{total_pts:.1f}"])
+    table.append(
+        ["", "TOTAL", f"${total_sal:,.0f} / ${SALARY_CAP:,}", f"{total_pts:.1f}"]
+    )
     print(tabulate(table, headers=["Role", "Player", "Salary", "FPPG"]))
 
     lineup = [
-        {"role": "Captain", "name": df.at[i, "Name"], "team": df.at[i, "TeamAbbrev"],
-         "salary": int(1.5 * sal[i]), "projected_fppg": round(1.5 * fppg[i], 1)}
+        {
+            "role": "Captain",
+            "name": df.at[i, "Name"],
+            "team": df.at[i, "TeamAbbrev"],
+            "salary": int(1.5 * sal[i]),
+            "projected_fppg": round(1.5 * fppg[i], 1),
+            "game_date": df.at[i, "GameDate"],
+        }
         for i in cpt_idx
     ] + [
-        {"role": "Util", "name": df.at[i, "Name"], "team": df.at[i, "TeamAbbrev"],
-         "salary": sal[i], "projected_fppg": round(fppg[i], 1)}
+        {
+            "role": "Util",
+            "name": df.at[i, "Name"],
+            "team": df.at[i, "TeamAbbrev"],
+            "salary": sal[i],
+            "projected_fppg": round(fppg[i], 1),
+            "game_date": df.at[i, "GameDate"],
+        }
         for i in util_idx
     ]
     return lineup
@@ -400,8 +473,10 @@ def classic_solution(df, oprk_weight=0.1):
 
     for group, (lo, _) in POSITION_CONSTRAINTS.items():
         if lo > 0 and not eligible.get(group):
-            sys.exit(f"No players eligible for position {group}; "
-                     "cannot build a valid Classic lineup.")
+            sys.exit(
+                f"No players eligible for position {group}; "
+                "cannot build a valid Classic lineup."
+            )
 
     fppg = df["AvgPointsPerGame"].to_list()
     sal = df["Salary"].to_list()
@@ -433,12 +508,20 @@ def classic_solution(df, oprk_weight=0.1):
     ]
     total_sal = sum(sal[i] for i in idx)
     total_pts = sum(fppg[i] for i in idx)
-    table.append(["", "TOTAL", f"${total_sal:,.0f} / ${SALARY_CAP:,}", f"{total_pts:.1f}"])
+    table.append(
+        ["", "TOTAL", f"${total_sal:,.0f} / ${SALARY_CAP:,}", f"{total_pts:.1f}"]
+    )
     print(tabulate(table, headers=["Position", "Player", "Salary", "FPPG"]))
 
     lineup = [
-        {"role": display_pos[i], "name": df.at[i, "Name"], "team": df.at[i, "TeamAbbrev"],
-         "salary": sal[i], "projected_fppg": round(fppg[i], 1)}
+        {
+            "role": display_pos[i],
+            "name": df.at[i, "Name"],
+            "team": df.at[i, "TeamAbbrev"],
+            "salary": sal[i],
+            "projected_fppg": round(fppg[i], 1),
+            "game_date": df.at[i, "GameDate"],
+        }
         for i in idx
     ]
     return lineup
@@ -449,8 +532,16 @@ def classic_solution(df, oprk_weight=0.1):
 HISTORY_DIR = Path(__file__).resolve().parent
 HISTORY_FILE = HISTORY_DIR / "history.csv"
 HISTORY_COLUMNS = [
-    "date", "draft_group", "oprk_weight", "role", "name", "team",
-    "salary", "projected_fppg", "actual_fppg",
+    "date",
+    "draft_group",
+    "oprk_weight",
+    "role",
+    "name",
+    "team",
+    "salary",
+    "projected_fppg",
+    "actual_fppg",
+    "game_date",
 ]
 
 
@@ -468,6 +559,7 @@ def _save_lineup(lineup_rows, draft_group_id, game_date, oprk_weight):
             "salary": row["salary"],
             "projected_fppg": row["projected_fppg"],
             "actual_fppg": "",
+            "game_date": row["game_date"],
         }
         for row in lineup_rows
     ]
@@ -477,7 +569,8 @@ def _save_lineup(lineup_rows, draft_group_id, game_date, oprk_weight):
         existing = pd.read_csv(HISTORY_FILE, dtype=str).fillna("").to_dict("records")
 
     kept = [
-        r for r in existing
+        r
+        for r in existing
         if not (r["date"] == game_date and r["draft_group"] == str(draft_group_id))
     ]
     replaced = len(existing) - len(kept)
@@ -503,8 +596,13 @@ def _dk_fantasy_points(pts, fg3m, reb, ast, stl, blk, tov):
 
 # DraftKings uses non-standard team abbreviations in some cases.
 _DK_TO_NBA_TEAM = {
-    "PHX": "PHX", "GS": "GSW", "SA": "SAS", "NY": "NYK",
-    "NO": "NOP", "BKN": "BKN", "BK": "BKN",
+    "PHX": "PHX",
+    "GS": "GSW",
+    "SA": "SAS",
+    "NY": "NYK",
+    "NO": "NOP",
+    "BKN": "BKN",
+    "BK": "BKN",
 }
 
 
@@ -544,12 +642,24 @@ def _fetch_box_scores(game_date_str):
         name = row.get("PLAYER_NAME", "")
         team = row.get("TEAM_ABBREVIATION", "")
         fp = _dk_fantasy_points(
-            row.get("PTS", 0), row.get("FG3M", 0), row.get("REB", 0),
-            row.get("AST", 0), row.get("STL", 0), row.get("BLK", 0),
+            row.get("PTS", 0),
+            row.get("FG3M", 0),
+            row.get("REB", 0),
+            row.get("AST", 0),
+            row.get("STL", 0),
+            row.get("BLK", 0),
             row.get("TOV", 0),
         )
         results[(name, team)] = fp
     return results
+
+
+def _normalize_name(name):
+    """Strip diacritical marks so 'Nikola Jokić' matches 'Nikola Jokic'."""
+    return "".join(
+        c for c in unicodedata.normalize("NFD", name)
+        if unicodedata.category(c) != "Mn"
+    )
 
 
 def _review():
@@ -558,44 +668,64 @@ def _review():
         sys.exit(f"No history file found at {HISTORY_FILE}")
 
     df = pd.read_csv(HISTORY_FILE, dtype=str).fillna("")
-    pending_dates = sorted(df.loc[df["actual_fppg"] == "", "date"].unique())
-    if not pending_dates:
+    pending_mask = df["actual_fppg"] == ""
+    if not pending_mask.any():
         print("No pending lineups to review.")
         return
 
-    for target_date_str in pending_dates:
-        mask = (df["date"] == target_date_str) & (df["actual_fppg"] == "")
-        pending = df[mask]
+    # Group pending entries by their per-player game_date.
+    pending_idx = df.index[pending_mask]
+    unique_dates = sorted(df.loc[pending_idx, "game_date"].unique())
 
-        print(f"Fetching actual scores for {target_date_str} ...")
-        box = _fetch_box_scores(target_date_str)
+    # Cache box scores per date to avoid duplicate API calls.
+    box_cache = {}       # game_date -> {(name, team): fp}
+    norm_cache = {}      # game_date -> {(normalized_name, team): fp}
+    for gd in unique_dates:
+        print(f"Fetching actual scores for {gd} ...")
+        box = _fetch_box_scores(gd)
+        box_cache[gd] = box
         if not box:
             print("  No box score data returned. Games may not have finished yet.")
-            continue
+        else:
+            norm_cache[gd] = {(_normalize_name(n), t): fp for (n, t), fp in box.items()}
 
-        matched, unmatched = 0, 0
-        for idx in pending.index:
-            name = df.at[idx, "name"]
-            team = _normalize_team(df.at[idx, "team"])
-            role = df.at[idx, "role"]
-            fp = box.get((name, team))
-            if fp is None:
-                for (bname, bteam), bfp in box.items():
-                    if bname == name:
-                        fp = bfp
-                        break
-            if fp is not None:
-                if role == "Captain":
-                    fp *= 1.5
-                df.at[idx, "actual_fppg"] = f"{fp:.1f}"
-                matched += 1
-            else:
-                unmatched += 1
-        print(f"  Updated {matched} players. {unmatched} could not be matched.")
+    matched_total, unmatched_total = 0, 0
+    for idx in pending_idx:
+        gd = df.at[idx, "game_date"]
+        box = box_cache.get(gd, {})
+        if not box:
+            continue
+        name = df.at[idx, "name"]
+        team = _normalize_team(df.at[idx, "team"])
+        role = df.at[idx, "role"]
+
+        # Try exact match on (name, team), then normalized (name, team),
+        # then name-only, then normalized name-only.
+        fp = box.get((name, team))
+        if fp is None:
+            norm_box = norm_cache.get(gd, {})
+            fp = norm_box.get((_normalize_name(name), team))
+        if fp is None:
+            for (bname, bteam), bfp in box.items():
+                if bname == name or _normalize_name(bname) == _normalize_name(name):
+                    fp = bfp
+                    break
+
+        if fp is not None:
+            if role == "Captain":
+                fp *= 1.5
+            df.at[idx, "actual_fppg"] = f"{fp:.1f}"
+            matched_total += 1
+        else:
+            # Player not in box score — DNP / rest → 0 fantasy points.
+            df.at[idx, "actual_fppg"] = "0.0"
+            unmatched_total += 1
+    print(f"  Updated {matched_total} players. {unmatched_total} could not be matched.")
 
     df.to_csv(HISTORY_FILE, index=False)
 
-    for target_date_str in pending_dates:
+    # Print per-date review tables.
+    for target_date_str in sorted(df.loc[df["actual_fppg"] != "", "date"].unique()):
         filled = df[(df["date"] == target_date_str) & (df["actual_fppg"] != "")]
         if not filled.empty:
             print(f"\n── {target_date_str} ──")
@@ -608,14 +738,30 @@ def _print_review_table(df):
         projected = float(row["projected_fppg"]) if row["projected_fppg"] else 0
         actual = float(row["actual_fppg"]) if row["actual_fppg"] else 0
         delta = actual - projected
-        table.append([
-            row["role"], row["name"],
-            f"{projected:.1f}", f"{actual:.1f}", f"{delta:+.1f}",
-        ])
-    projected_total = sum(float(r["projected_fppg"]) for _, r in df.iterrows() if r["projected_fppg"])
-    actual_total = sum(float(r["actual_fppg"]) for _, r in df.iterrows() if r["actual_fppg"])
-    table.append(["", "TOTAL", f"{projected_total:.1f}", f"{actual_total:.1f}",
-                  f"{actual_total - projected_total:+.1f}"])
+        table.append(
+            [
+                row["role"],
+                row["name"],
+                f"{projected:.1f}",
+                f"{actual:.1f}",
+                f"{delta:+.1f}",
+            ]
+        )
+    projected_total = sum(
+        float(r["projected_fppg"]) for _, r in df.iterrows() if r["projected_fppg"]
+    )
+    actual_total = sum(
+        float(r["actual_fppg"]) for _, r in df.iterrows() if r["actual_fppg"]
+    )
+    table.append(
+        [
+            "",
+            "TOTAL",
+            f"{projected_total:.1f}",
+            f"{actual_total:.1f}",
+            f"{actual_total - projected_total:+.1f}",
+        ]
+    )
     print(tabulate(table, headers=["Role", "Player", "Projected", "Actual", "Delta"]))
 
 
@@ -643,19 +789,28 @@ def _show_stats():
         act = grp["actual_fppg"].sum()
         delta = act - proj
         pct = (act / proj * 100) if proj > 0 else 0
-        table.append([d, dg, f"{proj:.1f}", f"{act:.1f}", f"{delta:+.1f}", f"{pct:.0f}%"])
+        table.append(
+            [d, dg, f"{proj:.1f}", f"{act:.1f}", f"{delta:+.1f}", f"{pct:.0f}%"]
+        )
         total_projected += proj
         total_actual += act
         abs_errors.append(abs(delta))
         n_lineups += 1
 
-    print(tabulate(table, headers=["Date", "Draft Group", "Projected", "Actual", "Delta", "Accuracy"]))
+    print(
+        tabulate(
+            table,
+            headers=["Date", "Draft Group", "Projected", "Actual", "Delta", "Accuracy"],
+        )
+    )
     if n_lineups > 0:
         avg_pct = total_actual / total_projected * 100 if total_projected > 0 else 0
         mae = sum(abs_errors) / n_lineups
-        print(f"\n{n_lineups} lineup(s) tracked  |  "
-              f"Avg accuracy: {avg_pct:.0f}%  |  "
-              f"Mean absolute error: {mae:.1f} pts")
+        print(
+            f"\n{n_lineups} lineup(s) tracked  |  "
+            f"Avg accuracy: {avg_pct:.0f}%  |  "
+            f"Mean absolute error: {mae:.1f} pts"
+        )
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
@@ -668,20 +823,42 @@ MODES = {
 
 def main():
     parser = argparse.ArgumentParser(description="DraftKings lineup optimizer")
-    parser.add_argument("--mode", required=False, choices=list(MODES),
-                        help="Contest mode: Captain or Classic (auto from available games if omitted)")
-    parser.add_argument("--draft-group", type=int, default=None,
-                        help="Draft group ID (auto-selected if omitted)")
-    parser.add_argument("--players-out", nargs="+", default=[],
-                        help="Players to exclude")
-    parser.add_argument("--oprk-weight", type=float, default=0.1,
-                        help="OPRK matchup weight (0 to disable, default 0.1)")
-    parser.add_argument("--list-draft-groups", action="store_true",
-                        help="Fetch lobby and list all NBA draft groups with GameTypeId (debug)")
-    parser.add_argument("--review", action="store_true",
-                        help="Fetch actual scores for all pending dates in history")
-    parser.add_argument("--stats", action="store_true",
-                        help="Print accuracy summary from lineup history")
+    parser.add_argument(
+        "--mode",
+        required=False,
+        choices=list(MODES),
+        help="Contest mode: Captain or Classic (auto from available games if omitted)",
+    )
+    parser.add_argument(
+        "--draft-group",
+        type=int,
+        default=None,
+        help="Draft group ID (auto-selected if omitted)",
+    )
+    parser.add_argument(
+        "--players-out", nargs="+", default=[], help="Players to exclude"
+    )
+    parser.add_argument(
+        "--oprk-weight",
+        type=float,
+        default=0,
+        help="OPRK matchup weight (0 to disable, default 0)",
+    )
+    parser.add_argument(
+        "--list-draft-groups",
+        action="store_true",
+        help="Fetch lobby and list all NBA draft groups with GameTypeId (debug)",
+    )
+    parser.add_argument(
+        "--review",
+        action="store_true",
+        help="Fetch actual scores for all pending dates in history",
+    )
+    parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Print accuracy summary from lineup history",
+    )
     args = parser.parse_args()
 
     if args.stats:
@@ -695,12 +872,19 @@ def main():
     if args.list_draft_groups:
         data = _api_get(CONTESTS_URL)
         dgs = data.get("DraftGroups", [])
-        print(f"NBA draft groups ({len(dgs)} total):")
-        for dg in sorted(dgs, key=lambda x: (x.get("GameTypeId", 0), -x.get("GameCount", 0))):
-            print(f"  DraftGroupId={dg.get('DraftGroupId')}  GameTypeId={dg.get('GameTypeId')}  "
-                  f"GameCount={dg.get('GameCount')}  Start={str(dg.get('ContestStartTime', ''))[:19]}")
-        gt_ids = sorted(set(dg.get("GameTypeId") for dg in dgs))
-        print(f"Unique GameTypeIds in response: {gt_ids}")
+        print(f"NBA draft groups ({len(dgs)} total):\n")
+        for dg in sorted(
+            dgs, key=lambda x: (x.get("GameTypeId", 0), -x.get("GameCount", 0))
+        ):
+            dg_id = dg.get("DraftGroupId")
+            label = _draft_group_label(dg)
+            try:
+                draftables = _api_get(DRAFTABLES_URL.format(group_id=dg_id))
+                teams = _teams_from_draftables(draftables.get("draftables", []))
+            except Exception:
+                teams = None
+            teams_part = f"  {teams}" if teams else ""
+            print(f"  {dg_id}  {label}{teams_part}")
         return
 
     lobby_data = None
@@ -709,14 +893,20 @@ def main():
         lobby_data = data
         detected_mode = _mode_for_draft_group(data, args.draft_group)
         if detected_mode is None:
-            sys.exit(f"Draft group {args.draft_group} not found in today's lobby "
-                     "or has an unsupported game type.")
+            sys.exit(
+                f"Draft group {args.draft_group} not found in today's lobby "
+                "or has an unsupported game type."
+            )
         if args.mode is not None and args.mode != detected_mode:
-            sys.exit(f"--mode {args.mode} conflicts with draft group {args.draft_group} "
-                     f"which is {detected_mode}.")
+            sys.exit(
+                f"--mode {args.mode} conflicts with draft group {args.draft_group} "
+                f"which is {detected_mode}."
+            )
         if args.mode is None:
             args.mode = detected_mode
-            print(f"Auto-detected mode: {args.mode} (from draft group {args.draft_group})")
+            print(
+                f"Auto-detected mode: {args.mode} (from draft group {args.draft_group})"
+            )
     elif args.mode is None:
         data = _api_get(CONTESTS_URL)
         args.mode = _choose_mode_from_lobby(data)
@@ -726,14 +916,15 @@ def main():
         lobby_data = data
 
     draft_group_id = args.draft_group
-    df, draft_group_id = fetch_roster(args.mode, draft_group_id, lobby_data=lobby_data)
+    df, draft_group_id, game_date = fetch_roster(
+        args.mode, draft_group_id, lobby_data=lobby_data
+    )
     if args.players_out:
         df = df[~df["Name"].isin(args.players_out)].reset_index(drop=True)
 
     lineup = MODES[args.mode](df, oprk_weight=args.oprk_weight)
 
     if lineup:
-        game_date = date.today().isoformat()
         _save_lineup(lineup, draft_group_id, game_date, args.oprk_weight)
 
 
