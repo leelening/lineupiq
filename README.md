@@ -12,7 +12,7 @@ Requires Python 3.12+. Uses [Gurobi](https://www.gurobi.com/) when available (fr
 uv sync
 ```
 
-Dependencies (`pandas`, `python-mip`, `tabulate`, `requests`) are declared in `pyproject.toml` and installed automatically.
+Dependencies (`pandas`, `python-mip`, `tabulate`, `requests`, `nba_api`) are declared in `pyproject.toml` and installed automatically.
 
 ## Usage
 
@@ -44,6 +44,23 @@ uv run main.py --mode Classic --draft-group 12345
 
 ```bash
 uv run main.py --mode Captain --players-out "LeBron James" "Stephen Curry"
+```
+
+### Weight projections by matchup
+
+```bash
+uv run main.py --oprk-weight 0.1
+```
+
+Scales each player's FPPG by DraftKings' Opponent Rank (OPRK): easier matchups get a boost, tougher ones a penalty. Default `0` (off).
+
+### Review results and track accuracy
+
+Every optimized lineup is saved to `history.csv`. After the games finish:
+
+```bash
+uv run main.py --review   # fetch actual box scores (nba_api) for all pending lineups
+uv run main.py --stats    # projected vs. actual summary across all reviewed lineups
 ```
 
 ### List available draft groups (debug)
@@ -112,8 +129,13 @@ uv run site/build.py --out _site && cp site/index.html _site/ && python -m http.
 ## Project Structure
 
 ```
-main.py              Optimizer (API client, solvers, CLI)
+main.py              Optimizer (API client, solvers, history/review, CLI)
+history.csv          Saved lineups with projected and actual FPPG
 site/                GitHub Pages site (build.py + index.html)
 .github/workflows/   Pages build & deploy workflow
 pyproject.toml       Dependencies and project metadata
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE). For entertainment only; projections are DraftKings FPPG averages, not guarantees.
