@@ -56,7 +56,7 @@ jobs:
           git config user.name  "Lening Li"
           git config user.email "8867086+leelening@users.noreply.github.com"
           git add history.csv
-          git commit -m "chore: update lineup history ($(date -u +%F)) [skip ci]"
+          git commit -m "Update lineup history ($(date -u +%F)) [skip ci]"
           git pull --rebase origin main
           git push origin HEAD:main
 

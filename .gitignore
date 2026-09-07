@@ -1,5 +1,8 @@
-*.pyc
+# Python
 __pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Site build output
 _site/
-*.bundle
-Claude outputs/

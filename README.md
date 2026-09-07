@@ -2,7 +2,7 @@
 
 DraftKings NBA lineup optimizer that finds the salary-cap-optimal roster using mixed-integer programming.
 
-Supports **Captain (Showdown)** and **Classic** contest modes. Player data can be fetched live from the DraftKings API or loaded from a local CSV export.
+Supports **Captain (Showdown)** and **Classic** contest modes. Player data is fetched live from the DraftKings API.
 
 ## Setup
 
@@ -38,12 +38,6 @@ The tool auto-selects a slate: for Captain it prefers single-game Showdown, for 
 
 ```bash
 uv run main.py --mode Classic --draft-group 12345
-```
-
-### Use a local DKSalaries CSV instead
-
-```bash
-uv run main.py --mode Classic --roster-file DKSalaries.csv
 ```
 
 ### Exclude specific players
@@ -122,6 +116,4 @@ main.py              Optimizer (API client, solvers, CLI)
 site/                GitHub Pages site (build.py + index.html)
 .github/workflows/   Pages build & deploy workflow
 pyproject.toml       Dependencies and project metadata
-ref/                 MATLAB reference implementations
-doc/                 Background material
 ```
