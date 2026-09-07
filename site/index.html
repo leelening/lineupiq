@@ -66,9 +66,6 @@
   }
   .sponsor:hover { border-color: var(--accent); }
   .sponsor svg { width: 14px; height: 14px; fill: #db61a2; }
-  .support { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; margin-top: 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-  .support p { margin: 0; color: var(--text); }
-  .support .btn { margin-top: 0; }
 </style>
 </head>
 <body>
@@ -91,11 +88,6 @@
 
   <section id="today" class="card"><div class="empty">Loading today's lineup…</div></section>
   <section id="history" class="card" hidden><div class="empty">Loading history…</div></section>
-
-  <aside class="support">
-    <p><strong>Support LineupIQ.</strong> The optimizer is free and open source; sponsorship covers the solver runs and keeps the daily lineups and history going.</p>
-    <a class="btn" href="https://github.com/sponsors/leelening" target="_blank" rel="noopener">Sponsor on GitHub ♥</a>
-  </aside>
 
   <footer>
     DraftKings NBA lineup optimizer — binary integer program (max projected FPPG, $50k cap) solved daily by GitHub Actions.
