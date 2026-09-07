@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LineupIQ — Optimal DraftKings NBA Lineups</title>
+<meta name="description" content="Salary-cap-optimal DraftKings NBA lineups, solved daily with mixed-integer programming, with projected-vs-actual history.">
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --text: #e8eaf0; --muted: #8b93a7;
+    --accent: #f2a93b; --good: #4cc38a; --bad: #e5675f; --border: #2a2f3a;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7fa; --panel: #ffffff; --panel-2: #f0f2f6; --text: #1a1d24; --muted: #5f6879;
+      --accent: #c77d12; --good: #1f9a62; --bad: #c9443c; --border: #dde1ea;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 20px 64px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; }
+  h1 span { color: var(--accent); }
+  .tag { color: var(--muted); font-size: 13px; }
+  nav.tabs { display: flex; gap: 6px; margin-top: 20px; border-bottom: 1px solid var(--border); }
+  nav.tabs button {
+    background: none; border: none; color: var(--muted); font: inherit; font-weight: 600;
+    padding: 10px 14px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  nav.tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-top: 20px; }
+  .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .meta div { background: var(--panel-2); border-radius: 8px; padding: 10px 12px; }
+  .meta .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  .meta .v { font-size: 17px; font-weight: 600; margin-top: 2px; }
+  .good { color: var(--good); } .bad { color: var(--bad); }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.cpt td:first-child { color: var(--accent); font-weight: 700; }
+  tr.total td { border-bottom: none; font-weight: 700; border-top: 2px solid var(--border); }
+  .team { color: var(--muted); font-size: 13px; margin-left: 6px; }
+  a { color: var(--accent); }
+  .btn { display: inline-block; margin-top: 16px; padding: 10px 16px; border-radius: 8px; background: var(--accent); color: #111; font-weight: 600; text-decoration: none; }
+  .empty { text-align: center; padding: 40px 20px; color: var(--muted); }
+  .empty strong { display: block; color: var(--text); font-size: 18px; margin-bottom: 6px; }
+  .picker { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  .picker label { color: var(--muted); font-size: 13px; }
+  select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font: inherit; min-width: 180px;
+  }
+  .sublabel { color: var(--muted); font-size: 13px; margin: 14px 0 0; }
+  details { margin-top: 20px; color: var(--muted); }
+  details pre { background: var(--panel-2); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 12px; color: var(--text); }
+  footer { margin-top: 32px; color: var(--muted); font-size: 13px; }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Lineup<span>IQ</span></h1>
+    <div class="tag" id="generated">Loading…</div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" id="tab-today" aria-selected="true">Today</button>
+    <button role="tab" id="tab-history" aria-selected="false">History</button>
+  </nav>
+
+  <section id="today" class="card"><div class="empty">Loading today's lineup…</div></section>
+  <section id="history" class="card" hidden><div class="empty">Loading history…</div></section>
+
+  <footer>
+    DraftKings NBA lineup optimizer — binary integer program (max projected FPPG, $50k cap) solved daily by GitHub Actions.
+    <a href="https://github.com/leelening/lineupiq">Source on GitHub</a>.
+    For entertainment only; projections are DraftKings FPPG averages, not guarantees.
+    <div id="version" class="tag" style="margin-top:8px"></div>
+  </footer>
+</main>
+
+<script>
+(async function () {
+  const $ = id => document.getElementById(id);
+  const fmtMoney = n => '$' + Number(n).toLocaleString('en-US');
+  const f1 = n => Number(n).toFixed(1);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const signed = n => (n >= 0 ? '+' : '') + f1(n);
+  const cls = n => n >= 0 ? 'good' : 'bad';
+
+  // ── Tabs ─────────────────────────────────────────────────────────────
+  const tabs = { today: $('tab-today'), history: $('tab-history') };
+  function showTab(name) {
+    for (const k in tabs) {
+      tabs[k].setAttribute('aria-selected', String(k === name));
+      $(k).hidden = k !== name;
+    }
+    try { history.replaceState(null, '', name === 'today' ? location.pathname : '#history'); } catch (_) {}
+  }
+  tabs.today.onclick = () => showTab('today');
+  tabs.history.onclick = () => showTab('history');
+
+  // ── Shared table renderer ───────────────────────────────────────────
+  function lineupTable(L, withActual) {
+    const isCpt = L.mode === 'Captain';
+    const rows = L.lineup.map(p => {
+      const act = p.actual_fppg;
+      const d = act == null ? null : act - p.projected_fppg;
+      return `<tr class="${p.role === 'Captain' ? 'cpt' : ''}">
+        <td>${esc(p.role)}</td>
+        <td>${esc(p.name)}<span class="team">${esc(p.team)}</span></td>
+        <td class="num">${fmtMoney(p.salary)}</td>
+        <td class="num">${f1(p.projected_fppg)}</td>
+        ${withActual ? `<td class="num">${act == null ? '—' : f1(act)}</td>
+        <td class="num ${d == null ? '' : cls(d)}">${d == null ? '—' : signed(d)}</td>` : ''}
+      </tr>`;
+    }).join('');
+    const tp = L.total_projected_fppg, ta = L.total_actual_fppg;
+    return `<div class="table-wrap"><table>
+      <thead><tr><th>${isCpt ? 'Role' : 'Pos'}</th><th>Player</th><th class="num">Salary</th><th class="num">Proj</th>
+      ${withActual ? '<th class="num">Actual</th><th class="num">Δ</th>' : ''}</tr></thead>
+      <tbody>${rows}
+        <tr class="total"><td></td><td>TOTAL</td><td class="num">${fmtMoney(L.total_salary)}</td><td class="num">${f1(tp)}</td>
+        ${withActual ? `<td class="num">${ta == null ? '—' : f1(ta)}</td><td class="num ${ta == null ? '' : cls(ta - tp)}">${ta == null ? '—' : signed(ta - tp)}</td>` : ''}</tr>
+      </tbody></table></div>`;
+  }
+
+  // ── Today ─────────────────────────────────────────────────────────────
+  async function renderToday() {
+    const el = $('today'), gen = $('generated');
+    let data;
+    try {
+      const r = await fetch('data/lineup.json?_=' + Date.now());
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      data = await r.json();
+    } catch (e) {
+      el.innerHTML = `<div class="empty"><strong class="bad">Could not load lineup data</strong>${esc(e.message)}</div>`;
+      gen.textContent = ''; return;
+    }
+    if (data.generated_at) {
+      gen.textContent = 'Updated ' + new Date(data.generated_at).toLocaleString('en-US',
+        { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' }) + ' ET';
+    }
+    if (data.tool && data.tool.version) {
+      const t = data.tool;
+      const link = t.commit ? `<a href="https://github.com/leelening/lineupiq/commit/${esc(t.commit)}">${esc(t.commit)}</a>` : '';
+      $('version').innerHTML = `Optimizer v${esc(t.version)}` +
+        (t.code_changed ? ` · code last changed ${esc(t.code_changed)}` : '') +
+        (link ? ` · ${link}` : '');
+    }
+    if (data.status !== 'ok') {
+      el.innerHTML = `<div class="empty">
+        <strong>${data.status === 'error' ? 'Build error' : 'No lineup today'}</strong>
+        ${esc(data.message)}<br><br>
+        <a href="#history" id="goto-history">Browse past lineups →</a></div>`;
+      $('goto-history').onclick = e => { e.preventDefault(); showTab('history'); };
+      return;
+    }
+    const slate = [data.slate, data.teams].filter(Boolean).join(' — ');
+    el.innerHTML = `
+      <div class="meta">
+        <div><div class="k">Mode</div><div class="v">${esc(data.mode)}</div></div>
+        <div><div class="k">Game date</div><div class="v">${esc(data.game_date)}</div></div>
+        <div><div class="k">Projected FPPG</div><div class="v good">${f1(data.total_projected_fppg)}</div></div>
+        <div><div class="k">Salary used</div><div class="v">${fmtMoney(data.total_salary)} <span class="tag">/ ${fmtMoney(data.salary_cap)}</span></div></div>
+      </div>
+      <p class="sublabel">Slate: ${esc(slate)} · draft group ${esc(data.draft_group)} · ${data.player_pool} eligible players${data.oprk_weight ? ' · OPRK weight ' + data.oprk_weight : ''}</p>
+      ${lineupTable(data, false)}
+      <a class="btn" href="${esc(data.lobby_url)}" target="_blank" rel="noopener">Open slate on DraftKings ↗</a>
+      ${data.log ? `<details><summary>Solver log</summary><pre>${esc(data.log)}</pre></details>` : ''}`;
+  }
+
+  // ── History ───────────────────────────────────────────────────────────
+  async function renderHistory() {
+    const el = $('history');
+    let h;
+    try {
+      const r = await fetch('data/history.json?_=' + Date.now());
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      h = await r.json();
+    } catch (e) {
+      el.innerHTML = `<div class="empty"><strong class="bad">Could not load history</strong>${esc(e.message)}</div>`; return;
+    }
+    const lineups = (h && h.lineups) || [];
+    if (!lineups.length) { el.innerHTML = '<div class="empty"><strong>No history yet</strong>Run the optimizer to start tracking lineups.</div>'; return; }
+
+    const s = h.summary;
+    const summary = s ? `
+      <div class="meta">
+        <div><div class="k">Lineups tracked</div><div class="v">${s.lineups_reviewed}<span class="tag"> / ${s.lineups_total} reviewed</span></div></div>
+        <div><div class="k">Avg accuracy</div><div class="v ${s.avg_accuracy_pct >= 100 ? 'good' : ''}">${s.avg_accuracy_pct == null ? '—' : s.avg_accuracy_pct + '%'}</div></div>
+        <div><div class="k">Mean abs error</div><div class="v">${f1(s.mean_abs_error)} <span class="tag">pts / lineup</span></div></div>
+      </div>` : '';
+
+    const dates = [...new Set(lineups.map(L => L.date))];
+    el.innerHTML = `${summary}
+      <div class="picker" style="margin-top:16px">
+        <label>Date <select id="sel-date">${dates.map(d => `<option value="${d}">${d}</option>`).join('')}</select></label>
+        <label>Slate <select id="sel-slate"></select></label>
+      </div>
+      <div id="hist-detail"></div>`;
+
+    const selDate = $('sel-date'), selSlate = $('sel-slate'), detail = $('hist-detail');
+    function fillSlates() {
+      const opts = lineups.filter(L => L.date === selDate.value);
+      selSlate.innerHTML = opts.map(L => `<option value="${L.draft_group}">${esc(L.mode)} — ${esc(L.teams)} (${L.draft_group})</option>`).join('');
+      showDetail();
+    }
+    function showDetail() {
+      const L = lineups.find(x => x.date === selDate.value && String(x.draft_group) === selSlate.value);
+      if (!L) { detail.innerHTML = ''; return; }
+      const tp = L.total_projected_fppg, ta = L.total_actual_fppg;
+      const acc = ta == null ? null : ta / tp * 100;
+      detail.innerHTML = `
+        <div class="meta" style="margin-top:12px">
+          <div><div class="k">Mode</div><div class="v">${esc(L.mode)}</div></div>
+          <div><div class="k">Projected</div><div class="v">${f1(tp)}</div></div>
+          <div><div class="k">Actual</div><div class="v ${ta == null ? '' : cls(ta - tp)}">${ta == null ? 'pending' : f1(ta)}</div></div>
+          <div><div class="k">Accuracy</div><div class="v ${acc == null ? '' : (acc >= 100 ? 'good' : 'bad')}">${acc == null ? '—' : acc.toFixed(0) + '%'}</div></div>
+        </div>
+        <p class="sublabel">${esc(L.teams)} · draft group ${L.draft_group} · ${fmtMoney(L.total_salary)} of ${fmtMoney(L.salary_cap)}${L.oprk_weight ? ' · OPRK weight ' + L.oprk_weight : ''}${ta == null ? ' · actuals not yet reviewed (run <code>uv run main.py --review</code>)' : ''}</p>
+        ${lineupTable(L, true)}
+        <a class="btn" href="${esc(L.lobby_url)}" target="_blank" rel="noopener">Slate on DraftKings ↗</a>`;
+    }
+    selDate.onchange = fillSlates; selSlate.onchange = showDetail;
+    fillSlates();
+  }
+
+  if (location.hash === '#history') showTab('history');
+  await Promise.all([renderToday(), renderHistory()]);
+})();
+</script>
+</body>
+</html>

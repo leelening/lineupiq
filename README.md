@@ -101,10 +101,26 @@ Both modes are formulated as binary integer programs and solved via `python-mip`
 
 The solver finds a provably optimal lineup in under a second.
 
+## Website (GitHub Pages)
+
+Today's optimal lineup is published at **https://leelening.github.io/lineupiq/**.
+
+A GitHub Actions workflow (`.github/workflows/pages.yml`) runs `site/build.py` twice a day (10:00 and 17:00 ET), on every push to `main`, and on demand via *Actions → Build & deploy LineupIQ site → Run workflow* (optionally with a mode / draft group). Each run does what the CLI does, unattended: it first fills in actual FPPG for any pending past lineups (`--review`, via `nba_api`), then solves today's slate with `main.py` and saves it to `history.csv`, commits `history.csv` back to `main` if it changed, and deploys `site/index.html` with `data/lineup.json` and `data/history.json` (the **History** tab, projected vs. actual per lineup). Pass `--no-save` / `--no-review` to `site/build.py` to skip the write-back. The page footer shows the optimizer version, derived automatically from git as `<pyproject version>.<commits touching main.py>+<sha>` — it changes only when the optimization code changes, not for README or site edits.
+
+One-time setup: in the repo go to **Settings → Pages** and set *Source* to **GitHub Actions**.
+
+To preview locally:
+
+```bash
+uv run site/build.py --out _site && cp site/index.html _site/ && python -m http.server -d _site 8000
+```
+
 ## Project Structure
 
 ```
 main.py              Optimizer (API client, solvers, CLI)
+site/                GitHub Pages site (build.py + index.html)
+.github/workflows/   Pages build & deploy workflow
 pyproject.toml       Dependencies and project metadata
 ref/                 MATLAB reference implementations
 doc/                 Background material
