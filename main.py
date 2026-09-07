@@ -5,6 +5,7 @@ import argparse
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 import pandas as pd
@@ -81,8 +82,7 @@ def _api_get(url):
     return resp.json()
 
 
-"4 or 5 hours does not matter"
-ET = timezone(timedelta(hours=-5))
+ET = ZoneInfo("America/New_York")
 
 
 def _competition_date_map(data):
@@ -573,13 +573,17 @@ HISTORY_COLUMNS = [
 
 
 def _save_lineup(lineup_rows, draft_group_id, game_date, oprk_weight):
-    """Save lineup to history.csv, replacing any existing entry for the same date + draft_group."""
+    """Save lineup to history.csv, replacing any existing entry for the same draft_group.
+
+    A DraftKings draft group identifies one slate, so it is the dedupe key on its
+    own; keying on (date, draft_group) let the same slate be saved twice when the
+    computed date differed between runs."""
 
     new_rows = [
         {
             "date": game_date,
             "draft_group": str(draft_group_id),
-            "oprk_weight": oprk_weight,
+            "oprk_weight": float(oprk_weight),
             "role": row["role"],
             "name": row["name"],
             "team": row["team"],
@@ -598,12 +602,12 @@ def _save_lineup(lineup_rows, draft_group_id, game_date, oprk_weight):
     kept = [
         r
         for r in existing
-        if not (r["date"] == game_date and r["draft_group"] == str(draft_group_id))
+        if r["draft_group"] != str(draft_group_id)
     ]
     replaced = len(existing) - len(kept)
 
     with open(HISTORY_FILE, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=HISTORY_COLUMNS)
+        writer = csv.DictWriter(f, fieldnames=HISTORY_COLUMNS, lineterminator="\n")
         writer.writeheader()
         writer.writerows(kept + new_rows)
 
@@ -643,6 +647,11 @@ def _nba_season_string(d):
     return f"{year}-{(year + 1) % 100:02d}"
 
 
+# stats.nba.com splits stats by season type; a date only has games in one of them.
+# Tried in order until one returns data.
+SEASON_TYPES = ["Regular Season", "PlayIn", "Playoffs", "Pre Season"]
+
+
 def _fetch_box_scores(game_date_str):
     """Fetch player box scores for a given date via nba_api. Returns a dict: (name, team) -> actual_fppg."""
     from nba_api.stats.endpoints import LeagueDashPlayerStats
@@ -652,17 +661,24 @@ def _fetch_box_scores(game_date_str):
     season = _nba_season_string(d)
 
     results = {}
-    try:
-        stats = LeagueDashPlayerStats(
-            date_from_nullable=nba_date,
-            date_to_nullable=nba_date,
-            per_mode_detailed="Totals",
-            season=season,
-            season_type_all_star="Regular Season",
-        )
-        df = stats.get_data_frames()[0]
-    except Exception as e:
-        print(f"  Error fetching NBA stats: {e}")
+    df = None
+    for season_type in SEASON_TYPES:
+        try:
+            stats = LeagueDashPlayerStats(
+                date_from_nullable=nba_date,
+                date_to_nullable=nba_date,
+                per_mode_detailed="Totals",
+                season=season,
+                season_type_all_star=season_type,
+            )
+            frame = stats.get_data_frames()[0]
+        except Exception as e:
+            print(f"  Error fetching NBA stats ({season_type}): {e}")
+            return results
+        if not frame.empty:
+            df = frame
+            break
+    if df is None:
         return results
 
     for _, row in df.iterrows():
@@ -700,9 +716,11 @@ def _review():
         print("No pending lineups to review.")
         return
 
-    # Group pending entries by their per-player game_date.
+    # Group pending entries by their per-player game_date (fall back to the
+    # lineup date for legacy rows without one).
     pending_idx = df.index[pending_mask]
-    unique_dates = sorted(df.loc[pending_idx, "game_date"].unique())
+    row_date = df["game_date"].where(df["game_date"] != "", df["date"])
+    unique_dates = sorted(d for d in row_date[pending_idx].unique() if d)
 
     # Cache box scores per date to avoid duplicate API calls.
     box_cache = {}       # game_date -> {(name, team): fp}
@@ -716,15 +734,16 @@ def _review():
         else:
             norm_cache[gd] = {(_normalize_name(n), t): fp for (n, t), fp in box.items()}
 
-    matched_total, unmatched_total = 0, 0
+    matched_total, unmatched_total, deferred_total = 0, 0, 0
     for idx in pending_idx:
-        gd = df.at[idx, "game_date"]
+        gd = row_date[idx]
         box = box_cache.get(gd, {})
         if not box:
             continue
         name = df.at[idx, "name"]
         team = _normalize_team(df.at[idx, "team"])
         role = df.at[idx, "role"]
+        teams_played = {t for (_, t) in box}
 
         # Try exact match on (name, team), then normalized (name, team),
         # then name-only, then normalized name-only.
@@ -743,13 +762,21 @@ def _review():
                 fp *= 1.5
             df.at[idx, "actual_fppg"] = f"{fp:.1f}"
             matched_total += 1
-        else:
-            # Player not in box score — DNP / rest → 0 fantasy points.
+        elif team in teams_played:
+            # Team played and player is absent from its box score → DNP / rest → 0.
             df.at[idx, "actual_fppg"] = "0.0"
             unmatched_total += 1
-    print(f"  Updated {matched_total} players. {unmatched_total} could not be matched.")
+        else:
+            # Team has no box score for this date (game postponed, not yet
+            # posted, or wrong game_date) — leave pending rather than record 0.
+            print(f"  {name} ({team}): no {team} box score for {gd}; left pending.")
+            deferred_total += 1
+    print(
+        f"  Updated {matched_total} players. {unmatched_total} scored 0 (DNP). "
+        f"{deferred_total} left pending."
+    )
 
-    df.to_csv(HISTORY_FILE, index=False)
+    df.to_csv(HISTORY_FILE, index=False, lineterminator="\n")
 
     # Print per-date review tables.
     for target_date_str in sorted(df.loc[df["actual_fppg"] != "", "date"].unique()):
