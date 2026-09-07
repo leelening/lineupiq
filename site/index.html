@@ -79,7 +79,7 @@
     DraftKings NBA lineup optimizer — binary integer program (max projected FPPG, $50k cap) solved daily by GitHub Actions.
     <a href="https://github.com/leelening/lineupiq">Source on GitHub</a>.
     For entertainment only; projections are DraftKings FPPG averages, not guarantees.
-    <div style="margin-top:8px">Built by <a href="https://lening.li">Lening Li</a>.</div>
+    <div style="margin-top:8px">&copy; 2022&ndash;<span id="year">2026</span> <a href="https://lening.li">Lening Li</a>. Released under the <a href="https://github.com/leelening/lineupiq/blob/main/LICENSE">MIT License</a>.</div>
     <div id="version" class="tag" style="margin-top:8px"></div>
   </footer>
 </main>
@@ -87,6 +87,7 @@
 <script>
 (async function () {
   const $ = id => document.getElementById(id);
+  $('year').textContent = new Date().getFullYear();
   const fmtMoney = n => '$' + Number(n).toLocaleString('en-US');
   const f1 = n => Number(n).toFixed(1);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
