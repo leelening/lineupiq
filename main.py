@@ -55,20 +55,22 @@ SALARY_CAP = 50_000
 
 POSITIONS = ["PG", "SG", "SF", "PF", "C"]
 
-POSITION_CONSTRAINTS = {
-    "PG": (1, 2),
-    "SG": (1, 2),
-    "G": (3, 4),
-    "SF": (1, 2),
-    "PF": (1, 2),
-    "F": (3, 4),
-    "C": (1, 2),
-}
-
-COMPOSITE_GROUPS = {
+# Classic roster: 8 named slots, each filled by exactly one eligible player.
+ROSTER_SLOTS = {
+    "PG": ["PG"],
+    "SG": ["SG"],
+    "SF": ["SF"],
+    "PF": ["PF"],
+    "C": ["C"],
     "G": ["PG", "SG"],
     "F": ["SF", "PF"],
+    "UTIL": POSITIONS,
 }
+
+# Classic lineups must include players from at least 2 different games;
+# Showdown lineups must include players from at least 2 different teams.
+CLASSIC_MIN_GAMES = 2
+CAPTAIN_MIN_TEAMS = 2
 
 # ── API helpers ─────────────────────────────────────────────────────────────
 
@@ -336,6 +338,7 @@ def _to_dataframe(draftables, fppg_id, mode, comp_dates=None, fallback_date=None
             "TeamAbbrev": p.get("teamAbbreviation", ""),
             "Status": p.get("status", "None"),
             "GameDate": comp_dates.get(p.get("competitionId"), fallback_date),
+            "GameId": p.get("competitionId"),
         }
         for p in draftables
     ]
@@ -383,7 +386,7 @@ def _oprk_adjusted(fppg, oprk, alpha):
     return [f * (1.0 + alpha * (OPRK_NEUTRAL - o) / 30) for f, o in zip(fppg, oprk)]
 
 
-def captain_solution(df, oprk_weight=0.1):
+def captain_solution(df, oprk_weight=0):
     df = (
         df[df["Roster Position"] == "UTIL"]
         .drop_duplicates(subset=["Name"])
@@ -408,6 +411,12 @@ def captain_solution(df, oprk_weight=0.1):
     m += xsum(c[i] for i in I) == 1
     for i in I:
         m += c[i] + u[i] <= 1
+
+    # At least CAPTAIN_MIN_TEAMS teams: no single team may fill every slot.
+    teams = df["TeamAbbrev"].to_list()
+    if len(set(teams)) >= CAPTAIN_MIN_TEAMS:
+        for t in set(teams):
+            m += xsum(u[i] + c[i] for i in I if teams[i] == t) <= 6 - (CAPTAIN_MIN_TEAMS - 1)
 
     _solve(m)
 
@@ -452,7 +461,7 @@ def _has_position(position_str, pos):
     return pos in str(position_str).split("/")
 
 
-def classic_solution(df, oprk_weight=0.1):
+def classic_solution(df, oprk_weight=0):
     df = df.drop_duplicates(subset=["Name"]).reset_index(drop=True)
 
     eligible = {
@@ -464,17 +473,20 @@ def classic_solution(df, oprk_weight=0.1):
         sys.exit("No players with recognized positions; cannot build Classic lineup.")
     df = df.loc[sorted(has_position)].reset_index(drop=True)
 
+    # Slot eligibility: player i may fill slot s if any of its positions is allowed there.
     eligible = {
-        pos: [i for i in range(len(df)) if _has_position(df.at[i, "Position"], pos)]
-        for pos in POSITIONS
+        slot: [
+            i
+            for i in range(len(df))
+            if any(_has_position(df.at[i, "Position"], pos) for pos in allowed)
+        ]
+        for slot, allowed in ROSTER_SLOTS.items()
     }
-    for name, members in COMPOSITE_GROUPS.items():
-        eligible[name] = list({i for member in members for i in eligible[member]})
 
-    for group, (lo, _) in POSITION_CONSTRAINTS.items():
-        if lo > 0 and not eligible.get(group):
+    for slot, members in eligible.items():
+        if not members:
             sys.exit(
-                f"No players eligible for position {group}; "
+                f"No players eligible for roster slot {slot}; "
                 "cannot build a valid Classic lineup."
             )
 
@@ -483,27 +495,42 @@ def classic_solution(df, oprk_weight=0.1):
     oprk = df["OPRK"].to_list()
     adj = _oprk_adjusted(fppg, oprk, oprk_weight)
     I = range(len(df))
+    SLOTS = list(ROSTER_SLOTS)
 
     m = _new_model()
     x = [m.add_var(var_type=BINARY) for _ in I]
+    # y[i][s] = 1 if player i fills roster slot s.
+    y = {
+        (i, s): m.add_var(var_type=BINARY)
+        for s in SLOTS
+        for i in eligible[s]
+    }
 
     m.objective = xsum(adj[i] * x[i] for i in I)
 
     m += xsum(sal[i] * x[i] for i in I) <= SALARY_CAP
-    m += xsum(x[i] for i in I) == 8
+    m += xsum(x[i] for i in I) == len(SLOTS)
 
-    for group, (lo, hi) in POSITION_CONSTRAINTS.items():
-        m += xsum(x[i] for i in eligible[group]) >= lo
-        m += xsum(x[i] for i in eligible[group]) <= hi
+    # Each slot is filled by exactly one player; each selected player fills exactly one slot.
+    for s in SLOTS:
+        m += xsum(y[i, s] for i in eligible[s]) == 1
+    for i in I:
+        m += xsum(y[i, s] for s in SLOTS if (i, s) in y) == x[i]
+
+    # At least CLASSIC_MIN_GAMES games: no single game may fill every slot.
+    games = df["GameId"].to_list() if "GameId" in df.columns else []
+    game_ids = {g for g in games if g is not None and g == g}
+    if len(game_ids) >= CLASSIC_MIN_GAMES:
+        for g in game_ids:
+            m += xsum(x[i] for i in I if games[i] == g) <= len(SLOTS) - (CLASSIC_MIN_GAMES - 1)
 
     _solve(m)
 
-    display_pos = df["Position"].apply(
-        lambda p: next((pos for pos in POSITIONS if _has_position(p, pos)), str(p))
-    )
     idx = _picked(x)
+    slot_of = {i: s for (i, s), v in y.items() if v.x >= 0.99}
+    idx.sort(key=lambda i: SLOTS.index(slot_of[i]))
     table = [
-        [display_pos[i], df.at[i, "Name"], f"${sal[i]:,}", f"{fppg[i]:.1f}"]
+        [slot_of[i], df.at[i, "Name"], f"${sal[i]:,}", f"{fppg[i]:.1f}"]
         for i in idx
     ]
     total_sal = sum(sal[i] for i in idx)
@@ -511,11 +538,11 @@ def classic_solution(df, oprk_weight=0.1):
     table.append(
         ["", "TOTAL", f"${total_sal:,.0f} / ${SALARY_CAP:,}", f"{total_pts:.1f}"]
     )
-    print(tabulate(table, headers=["Position", "Player", "Salary", "FPPG"]))
+    print(tabulate(table, headers=["Slot", "Player", "Salary", "FPPG"]))
 
     lineup = [
         {
-            "role": display_pos[i],
+            "role": slot_of[i],
             "name": df.at[i, "Name"],
             "team": df.at[i, "TeamAbbrev"],
             "salary": sal[i],

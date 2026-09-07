@@ -70,23 +70,26 @@ Pick 6 players from a single-game pool:
 - 5 **UTIL** — standard points and salary
 - Salary cap: **$50,000**
 - A player cannot fill both Captain and UTIL
+- Lineup must include players from both teams
 
 ### Classic NBA
 
-Pick 8 players across positions:
+Fill 8 roster slots, each with exactly one eligible player:
 
-| Position | Min | Max |
-|----------|-----|-----|
-| PG       | 1   | 2   |
-| SG       | 1   | 2   |
-| G (PG+SG)| 3   | 4   |
-| SF       | 1   | 2   |
-| PF       | 1   | 2   |
-| F (SF+PF)| 3   | 4   |
-| C        | 1   | 2   |
+| Slot | Eligible positions |
+|------|--------------------|
+| PG   | PG                 |
+| SG   | SG                 |
+| SF   | SF                 |
+| PF   | PF                 |
+| C    | C                  |
+| G    | PG, SG             |
+| F    | SF, PF             |
+| UTIL | any                |
 
 - Salary cap: **$50,000**
 - Dual-position players (e.g. PG/SG) are eligible for all listed positions
+- Lineup must include players from at least 2 different games
 
 ## How It Works
 
@@ -94,7 +97,7 @@ Both modes are formulated as binary integer programs and solved via `python-mip`
 
 - **Decision variables**: binary (0/1) — whether each player is selected
 - **Objective**: maximize total projected fantasy points (FPPG)
-- **Constraints**: salary cap, player count, position limits, mutual exclusion (Captain mode)
+- **Constraints**: salary cap, player count, roster-slot assignment (Classic), mutual exclusion and 2-team minimum (Captain), 2-game minimum (Classic)
 
 The solver finds a provably optimal lineup in under a second.
 
