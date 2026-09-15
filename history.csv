@@ -127,9 +127,9 @@ date,draft_group,oprk_weight,role,name,team,salary,projected_fppg,actual_fppg,ga
 2026-03-17,143890,0.1,Util,Aaron Gordon,DEN,7400,30.7,23.2,2026-03-17
 2026-03-17,143890,0.1,Util,Jonas Valanciunas,DEN,2000,17.4,20.2,2026-03-17
 2026-03-17,143890,0.1,Util,KJ Simpson,DEN,1000,13.2,0.0,2026-03-17
-2026-03-18,144045,0,Captain,Josh Giddey,CHI,16200,68.6,,2026-03-18
-2026-03-18,144045,0,Util,Scottie Barnes,TOR,9400,41.3,,2026-03-18
-2026-03-18,144045,0,Util,Brandon Ingram,TOR,9200,36.4,,2026-03-18
-2026-03-18,144045,0,Util,Immanuel Quickley,TOR,8200,34.7,,2026-03-18
-2026-03-18,144045,0,Util,Sandro Mamukelashvili,TOR,3400,22.6,,2026-03-18
-2026-03-18,144045,0,Util,Jamal Shead,TOR,3000,18.9,,2026-03-18
+2026-03-18,144045,0,Captain,Josh Giddey,CHI,16200,68.6,21.8,2026-03-18
+2026-03-18,144045,0,Util,Scottie Barnes,TOR,9400,41.3,32.2,2026-03-18
+2026-03-18,144045,0,Util,Brandon Ingram,TOR,9200,36.4,28.8,2026-03-18
+2026-03-18,144045,0,Util,Immanuel Quickley,TOR,8200,34.7,28.0,2026-03-18
+2026-03-18,144045,0,Util,Sandro Mamukelashvili,TOR,3400,22.6,31.5,2026-03-18
+2026-03-18,144045,0,Util,Jamal Shead,TOR,3000,18.9,8.8,2026-03-18
