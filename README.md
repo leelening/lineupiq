@@ -59,9 +59,15 @@ Scales each player's FPPG by DraftKings' Opponent Rank (OPRK): easier matchups g
 Every optimized lineup is saved to `history.csv`. After the games finish:
 
 ```bash
-uv run main.py --review   # fetch actual box scores (nba_api) for all pending lineups
+uv run main.py --review   # fetch final box scores for pending lineups
 uv run main.py --stats    # projected vs. actual summary across all reviewed lineups
 ```
+
+Review uses completed ESPN box scores, with NBA Stats (`nba_api`) as a fallback for past dates when ESPN is unavailable. Requests have timeouts. Missing player data stays pending; only explicit DNP records are scored as zero. Reviewed lineups are preserved when the same slate is selected again.
+
+New lineups exclude WNBA contests, which DraftKings sometimes includes in its NBA lobby with NBA sport metadata. The 11 WNBA lineups already saved in September 2026 are retained, labeled with `league=WNBA`, and reviewed against WNBA scores. Their 66 missing player scores were backfilled from ESPN final box scores on October 2, 2026; the existing NBA scores and all original projections were preserved.
+
+Run the regression suite with `uv run python -m unittest discover -s tests -v`.
 
 ### List available draft groups (debug)
 
@@ -116,7 +122,7 @@ The solver finds a provably optimal lineup in under a second.
 
 Today's optimal lineup is published at **https://leelening.github.io/lineupiq/**.
 
-A GitHub Actions workflow (`.github/workflows/pages.yml`) runs `site/build.py` twice a day (10:00 and 17:00 ET), on every push to `main`, and on demand via *Actions → Build & deploy LineupIQ site → Run workflow* (optionally with a mode / draft group). Each run does what the CLI does, unattended: it first fills in actual FPPG for any pending past lineups (`--review`, via `nba_api`), then solves today's slate with `main.py` and saves it to `history.csv`, commits `history.csv` back to `main` if it changed, and deploys `site/index.html` with `data/lineup.json` and `data/history.json` (the **History** tab, projected vs. actual per lineup). Pass `--no-save` / `--no-review` to `site/build.py` to skip the write-back. The page footer shows the optimizer version, derived automatically from git as `<pyproject version>.<commits touching main.py>+<sha>` — it changes only when the optimization code changes, not for README or site edits.
+A GitHub Actions workflow (`.github/workflows/pages.yml`) runs `site/build.py` twice a day (10:00 and 17:00 ET), on every push to `main`, and on demand via *Actions → Build & deploy LineupIQ site → Run workflow* (optionally with a mode / draft group). Build and deployment share one runner, with a 20-minute timeout, so a queued second job cannot block later refreshes. Each run does what the CLI does, unattended: it first fills in actual FPPG for any pending past lineups (`--review`, using final ESPN box scores with an NBA Stats fallback), then solves today's slate with `main.py` and saves it to `history.csv`, commits `history.csv` back to `main` if it changed, and deploys `site/index.html` with `data/lineup.json` and `data/history.json` (the **History** tab, projected vs. actual per lineup). Pass `--no-save` / `--no-review` to `site/build.py` to skip the write-back. The page footer shows the optimizer version, derived automatically from git as `<pyproject version>.<commits touching main.py>+<sha>` — it changes only when the optimization code changes, not for README or site edits.
 
 One-time setup: in the repo go to **Settings → Pages** and set *Source* to **GitHub Actions**.
 
