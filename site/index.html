@@ -66,6 +66,10 @@
   }
   .sponsor:hover { border-color: var(--accent); }
   .sponsor svg { width: 14px; height: 14px; fill: #db61a2; }
+  /* Visitors (MapMyVisitors widget) */
+  .visitors h2 { margin: 0 0 12px; font-size: 16px; }
+  .visitors-map { display: flex; justify-content: center; }
+  #mapmyvisitors-widget { display: block; max-width: 100%; border-radius: 8px; overflow: hidden; }
 </style>
 </head>
 <body>
@@ -88,6 +92,14 @@
 
   <section id="today" class="card"><div class="empty">Loading today's lineup…</div></section>
   <section id="history" class="card" hidden><div class="empty">Loading history…</div></section>
+
+  <section id="visitors" class="card visitors" aria-labelledby="visitors-title">
+    <h2 id="visitors-title">Visitors</h2>
+    <div class="visitors-map">
+      <script type="text/javascript" id="mapmyvisitors" src="//mapmyvisitors.com/map.js?d=4RLKHlP0CVDKaKCU8Bloy8AD7zo4dmVcxvfQ5mmtaj0&cl=ffffff&w=a"></script>
+    </div>
+    <p class="sublabel">Live visitor map by <a href="https://mapmyvisitors.com/" target="_blank" rel="noopener">MapMyVisitors</a>.</p>
+  </section>
 
   <footer>
     DraftKings NBA lineup optimizer — binary integer program (max projected FPPG, $50k cap) solved daily by GitHub Actions.
