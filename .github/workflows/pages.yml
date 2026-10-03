@@ -23,12 +23,16 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  group: lineupiq-publish
   cancel-in-progress: false   # never cancel mid-commit
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,6 +44,9 @@ jobs:
 
       - name: Install dependencies
         run: uv sync
+
+      - name: Test history and slate selection
+        run: uv run python -m unittest discover -s tests -v
 
       - name: Review past lineups, solve today's, write site data
         run: |
@@ -67,12 +74,6 @@ jobs:
         with:
           path: _site
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
+      # Reuse the build runner so a second queued job cannot block every refresh.
       - id: deployment
         uses: actions/deploy-pages@v4

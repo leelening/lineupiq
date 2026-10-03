@@ -163,7 +163,7 @@ def build(mode=None, draft_group=None, players_out=(), oprk_weight=0.0, save=Tru
 def build_history():
     """Convert history.csv into a list of past lineups (newest first)."""
     if not liq.HISTORY_FILE.exists():
-        return []
+        return {"summary": None, "lineups": []}
     import pandas as pd
 
     df = pd.read_csv(liq.HISTORY_FILE, dtype=str).fillna("")
@@ -192,6 +192,7 @@ def build_history():
         lineups.append(
             {
                 "date": d,
+                "league": grp["league"].iloc[0] if "league" in grp and grp["league"].iloc[0] else "NBA",
                 "draft_group": int(dg),
                 "mode": mode,
                 "oprk_weight": float(grp["oprk_weight"].iloc[0] or 0),

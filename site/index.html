@@ -219,7 +219,7 @@
     const s = h.summary;
     const summary = s ? `
       <div class="meta">
-        <div><div class="k">Lineups tracked</div><div class="v">${s.lineups_reviewed}<span class="tag"> / ${s.lineups_total} reviewed</span></div></div>
+        <div><div class="k">Lineups tracked</div><div class="v">${s.lineups_total}<span class="tag"> · ${s.lineups_reviewed} reviewed</span></div></div>
         <div><div class="k">Avg accuracy</div><div class="v ${s.avg_accuracy_pct >= 100 ? 'good' : ''}">${s.avg_accuracy_pct == null ? '—' : s.avg_accuracy_pct + '%'}</div></div>
         <div><div class="k">Mean abs error</div><div class="v">${f1(s.mean_abs_error)} <span class="tag">pts / lineup</span></div></div>
       </div>` : '';
@@ -235,7 +235,7 @@
     const selDate = $('sel-date'), selSlate = $('sel-slate'), detail = $('hist-detail');
     function fillSlates() {
       const opts = lineups.filter(L => L.date === selDate.value);
-      selSlate.innerHTML = opts.map(L => `<option value="${L.draft_group}">${esc(L.mode)} — ${esc(L.teams)} (${L.draft_group})</option>`).join('');
+      selSlate.innerHTML = opts.map(L => `<option value="${L.draft_group}">${esc(L.league || 'NBA')} ${esc(L.mode)} — ${esc(L.teams)} (${L.draft_group})</option>`).join('');
       showDetail();
     }
     function showDetail() {
@@ -250,7 +250,7 @@
           <div><div class="k">Actual</div><div class="v ${ta == null ? '' : cls(ta - tp)}">${ta == null ? 'pending' : f1(ta)}</div></div>
           <div><div class="k">Accuracy</div><div class="v ${acc == null ? '' : (acc >= 100 ? 'good' : 'bad')}">${acc == null ? '—' : acc.toFixed(0) + '%'}</div></div>
         </div>
-        <p class="sublabel">${esc(L.teams)} · draft group ${L.draft_group} · ${fmtMoney(L.total_salary)} of ${fmtMoney(L.salary_cap)}${L.oprk_weight ? ' · OPRK weight ' + L.oprk_weight : ''}${ta == null ? ' · actuals not yet reviewed (run <code>uv run main.py --review</code>)' : ''}</p>
+        <p class="sublabel">${esc(L.league || 'NBA')} · ${esc(L.teams)} · draft group ${L.draft_group} · ${fmtMoney(L.total_salary)} of ${fmtMoney(L.salary_cap)}${L.oprk_weight ? ' · OPRK weight ' + L.oprk_weight : ''}${ta == null ? ' · awaiting final player stats; checked automatically each refresh' : ''}</p>
         ${lineupTable(L, true)}
         <a class="btn" href="${esc(L.lobby_url)}" target="_blank" rel="noopener">Slate on DraftKings ↗</a>`;
     }

@@ -2,6 +2,7 @@ import csv
 import sys
 import logging
 import argparse
+import re
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -77,7 +78,7 @@ CAPTAIN_MIN_TEAMS = 2
 
 
 def _api_get(url):
-    resp = requests.get(url, headers=REQUEST_HEADERS)
+    resp = requests.get(url, headers=REQUEST_HEADERS, timeout=15)
     resp.raise_for_status()
     return resp.json()
 
@@ -162,6 +163,22 @@ def _teams_from_draftables(draftables):
     return ", ".join(abbrevs)
 
 
+def _is_nba_group(data, dg):
+    """DK's NBA endpoint also returns WNBA groups marked Sport=NBA.
+
+    Contest titles distinguish those groups even when the sport metadata does not.
+    """
+    if (dg.get("Sport") or "NBA").upper() != "NBA":
+        return False
+    titles = [dg.get("DraftGroupTag", ""), dg.get("ContestStartTimeSuffix", "")]
+    titles.extend(
+        c.get("n", "") for c in data.get("Contests", [])
+        if (c.get("dg") or c.get("DraftGroupId") or c.get("draftGroupId"))
+        == dg["DraftGroupId"]
+    )
+    return not any(re.search(r"\bWNBA\b", title or "", re.I) for title in titles)
+
+
 def _groups_for_mode(data, mode):
     """Return list of draft groups for this mode from lobby data (may be empty)."""
     wanted = GAME_TYPE_IDS[mode]
@@ -183,7 +200,7 @@ def _groups_for_mode(data, mode):
             groups = [
                 {"DraftGroupId": dg_id, "GameCount": 1} for dg_id in sorted(dg_ids)
             ]
-    return groups
+    return [dg for dg in groups if _is_nba_group(data, dg)]
 
 
 def _choose_mode_from_lobby(data):
@@ -201,6 +218,8 @@ def _mode_for_draft_group(data, draft_group_id):
     """Look up the mode (Captain/Classic) for a specific draft group ID from lobby data."""
     for dg in data.get("DraftGroups", []):
         if dg.get("DraftGroupId") == draft_group_id:
+            if not _is_nba_group(data, dg):
+                return None
             gt = dg.get("GameTypeId")
             for mode, ids in GAME_TYPE_IDS.items():
                 if gt in ids:
@@ -569,6 +588,7 @@ HISTORY_COLUMNS = [
     "projected_fppg",
     "actual_fppg",
     "game_date",
+    "league",
 ]
 
 
@@ -591,6 +611,7 @@ def _save_lineup(lineup_rows, draft_group_id, game_date, oprk_weight):
             "projected_fppg": row["projected_fppg"],
             "actual_fppg": "",
             "game_date": row["game_date"],
+            "league": "NBA",
         }
         for row in lineup_rows
     ]
@@ -598,6 +619,10 @@ def _save_lineup(lineup_rows, draft_group_id, game_date, oprk_weight):
     existing = []
     if HISTORY_FILE.exists():
         existing = pd.read_csv(HISTORY_FILE, dtype=str).fillna("").to_dict("records")
+
+    if any(r["draft_group"] == str(draft_group_id) and r["actual_fppg"] for r in existing):
+        print(f"Keeping reviewed lineup for draft group {draft_group_id}")
+        return
 
     kept = [
         r
@@ -652,13 +677,13 @@ def _nba_season_string(d):
 SEASON_TYPES = ["Regular Season", "PlayIn", "Playoffs", "Pre Season"]
 
 
-def _fetch_box_scores(game_date_str):
+def _fetch_nba_box_scores(game_date_str, league="NBA"):
     """Fetch player box scores for a given date via nba_api. Returns a dict: (name, team) -> actual_fppg."""
     from nba_api.stats.endpoints import LeagueDashPlayerStats
 
     d = date.fromisoformat(game_date_str)
     nba_date = d.strftime("%m/%d/%Y")
-    season = _nba_season_string(d)
+    season = str(d.year) if league == "WNBA" else _nba_season_string(d)
 
     results = {}
     df = None
@@ -670,10 +695,12 @@ def _fetch_box_scores(game_date_str):
                 per_mode_detailed="Totals",
                 season=season,
                 season_type_all_star=season_type,
+                league_id_nullable="10" if league == "WNBA" else "00",
+                timeout=5,
             )
             frame = stats.get_data_frames()[0]
         except Exception as e:
-            print(f"  Error fetching NBA stats ({season_type}): {e}")
+            print(f"  Error fetching {league} stats ({season_type}): {e}")
             return results
         if not frame.empty:
             df = frame
@@ -697,6 +724,62 @@ def _fetch_box_scores(game_date_str):
     return results
 
 
+def _fetch_espn_box_scores(game_date_str, league):
+    """Read only completed games; absent/malformed player stats stay pending."""
+    base = f"https://site.api.espn.com/apis/site/v2/sports/basketball/{league.lower()}"
+    scoreboard = _api_get(f"{base}/scoreboard?dates={game_date_str.replace('-', '')}")
+    results = {}
+    for event in scoreboard.get("events", []):
+        if not event.get("status", {}).get("type", {}).get("completed"):
+            continue
+        try:
+            summary = _api_get(f"{base}/summary?event={event['id']}")
+        except (requests.RequestException, ValueError) as e:
+            print(f"  Could not load final box score {event['id']}: {e}")
+            continue
+        competitions = summary.get("header", {}).get("competitions", [])
+        if not competitions or not competitions[0].get("status", {}).get("type", {}).get("completed"):
+            continue
+        for team_data in summary.get("boxscore", {}).get("players", []):
+            team = team_data["team"]["abbreviation"]
+            team = _normalize_team(team) if league == "NBA" else {
+                "NY": "NYL", "LA": "LAS", "LV": "LVA", "PHO": "PHX", "GS": "GSV",
+            }.get(team, team)
+            for section in team_data.get("statistics", []):
+                labels = section.get("labels", [])
+                for player in section.get("athletes", []):
+                    name = player["athlete"]["displayName"]
+                    if player.get("didNotPlay"):
+                        results[(name, team)] = 0.0
+                        continue
+                    stats = dict(zip(labels, player.get("stats", [])))
+                    try:
+                        results[(name, team)] = _dk_fantasy_points(
+                            float(stats["PTS"]), float(stats["3PT"].split("-")[0]),
+                            float(stats["REB"]), float(stats["AST"]),
+                            float(stats["STL"]), float(stats["BLK"]), float(stats["TO"]),
+                        )
+                    except (KeyError, ValueError):
+                        # Missing data is not a zero score or evidence of a DNP.
+                        continue
+    return results
+
+
+def _fetch_box_scores(game_date_str, league="NBA"):
+    if league not in {"NBA", "WNBA"}:
+        raise ValueError(f"Unsupported history league: {league}")
+    if game_date_str > datetime.now(ET).date().isoformat():
+        return {}
+    try:
+        return _fetch_espn_box_scores(game_date_str, league)
+    except (requests.RequestException, ValueError) as e:
+        print(f"  ESPN unavailable for {league} {game_date_str}: {e}")
+        # NBA Stats is a fallback for past dates only: today's totals may be live.
+        if game_date_str < datetime.now(ET).date().isoformat():
+            return _fetch_nba_box_scores(game_date_str, league)
+        return {}
+
+
 def _normalize_name(name):
     """Strip diacritical marks so 'Nikola Jokić' matches 'Nikola Jokic'."""
     return "".join(
@@ -711,6 +794,9 @@ def _review():
         sys.exit(f"No history file found at {HISTORY_FILE}")
 
     df = pd.read_csv(HISTORY_FILE, dtype=str).fillna("")
+    if "league" not in df:
+        df["league"] = "NBA"
+    df["league"] = df["league"].replace("", "NBA")
     pending_mask = df["actual_fppg"] == ""
     if not pending_mask.any():
         print("No pending lineups to review.")
@@ -720,36 +806,37 @@ def _review():
     # lineup date for legacy rows without one).
     pending_idx = df.index[pending_mask]
     row_date = df["game_date"].where(df["game_date"] != "", df["date"])
-    unique_dates = sorted(d for d in row_date[pending_idx].unique() if d)
+    row_keys = {idx: (df.at[idx, "league"], row_date[idx]) for idx in pending_idx}
+    unique_dates = sorted({key for key in row_keys.values() if key[1]})
 
-    # Cache box scores per date to avoid duplicate API calls.
-    box_cache = {}       # game_date -> {(name, team): fp}
-    norm_cache = {}      # game_date -> {(normalized_name, team): fp}
-    for gd in unique_dates:
-        print(f"Fetching actual scores for {gd} ...")
-        box = _fetch_box_scores(gd)
-        box_cache[gd] = box
+    # A team abbreviation can occur in both leagues on the same date.
+    box_cache = {}       # (league, game_date) -> {(name, team): fp}
+    norm_cache = {}      # (league, game_date) -> {(normalized_name, team): fp}
+    for league, gd in unique_dates:
+        print(f"Fetching {league} actual scores for {gd} ...")
+        box = _fetch_box_scores(gd, league)
+        box_cache[(league, gd)] = box
         if not box:
-            print("  No box score data returned. Games may not have finished yet.")
+            print("  No final box score data available; leaving scores pending.")
         else:
-            norm_cache[gd] = {(_normalize_name(n), t): fp for (n, t), fp in box.items()}
+            norm_cache[(league, gd)] = {(_normalize_name(n), t): fp for (n, t), fp in box.items()}
 
-    matched_total, unmatched_total, deferred_total = 0, 0, 0
+    matched_total, deferred_total = 0, 0
     for idx in pending_idx:
-        gd = row_date[idx]
-        box = box_cache.get(gd, {})
+        league, gd = row_keys[idx]
+        box = box_cache.get((league, gd), {})
         if not box:
+            deferred_total += 1
             continue
         name = df.at[idx, "name"]
-        team = _normalize_team(df.at[idx, "team"])
+        team = _normalize_team(df.at[idx, "team"]) if league == "NBA" else df.at[idx, "team"]
         role = df.at[idx, "role"]
-        teams_played = {t for (_, t) in box}
 
         # Try exact match on (name, team), then normalized (name, team),
         # then name-only, then normalized name-only.
         fp = box.get((name, team))
         if fp is None:
-            norm_box = norm_cache.get(gd, {})
+            norm_box = norm_cache.get((league, gd), {})
             fp = norm_box.get((_normalize_name(name), team))
         if fp is None:
             for (bname, bteam), bfp in box.items():
@@ -762,17 +849,12 @@ def _review():
                 fp *= 1.5
             df.at[idx, "actual_fppg"] = f"{fp:.1f}"
             matched_total += 1
-        elif team in teams_played:
-            # Team played and player is absent from its box score → DNP / rest → 0.
-            df.at[idx, "actual_fppg"] = "0.0"
-            unmatched_total += 1
         else:
-            # Team has no box score for this date (game postponed, not yet
-            # posted, or wrong game_date) — leave pending rather than record 0.
-            print(f"  {name} ({team}): no {team} box score for {gd}; left pending.")
+            # Only an explicit DNP or final stat line establishes a zero score.
+            print(f"  {name} ({team}): no matching final player stats for {gd}; left pending.")
             deferred_total += 1
     print(
-        f"  Updated {matched_total} players. {unmatched_total} scored 0 (DNP). "
+        f"  Updated {matched_total} players. "
         f"{deferred_total} left pending."
     )
 
