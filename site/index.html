@@ -5,17 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LineupIQ — Optimal DraftKings NBA Lineups</title>
 <meta name="description" content="Salary-cap-optimal DraftKings NBA lineups, solved daily with mixed-integer programming, with projected-vs-actual history.">
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-R15Z9JCHB4"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-R15Z9JCHB4');
+</script>
 <style>
   :root {
     --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --text: #e8eaf0; --muted: #8b93a7;
     --accent: #f2a93b; --good: #4cc38a; --bad: #e5675f; --border: #2a2f3a;
-    --map-land: #4b5466;
   }
   @media (prefers-color-scheme: light) {
     :root {
       --bg: #f6f7fa; --panel: #ffffff; --panel-2: #f0f2f6; --text: #1a1d24; --muted: #5f6879;
       --accent: #c77d12; --good: #1f9a62; --bad: #c9443c; --border: #dde1ea;
-      --map-land: #c5cbd8;
     }
   }
   * { box-sizing: border-box; }
@@ -70,11 +77,6 @@
   }
   .sponsor:hover { border-color: var(--accent); }
   .sponsor svg { width: 14px; height: 14px; fill: #db61a2; }
-  /* Visitors (MapMyVisitors widget) */
-  .visitors h2 { margin: 0 0 12px; font-size: 16px; }
-  .visitors-map { display: flex; justify-content: center; }
-  #mapmyvisitors-widget { display: block; max-width: 100%; border-radius: 8px; overflow: hidden; }
-  #clstminf { color: var(--muted) !important; }
 </style>
 </head>
 <body>
@@ -97,23 +99,6 @@
 
   <section id="today" class="card"><div class="empty">Loading today's lineup…</div></section>
   <section id="history" class="card" hidden><div class="empty">Loading history…</div></section>
-
-  <section id="visitors" class="card visitors" aria-labelledby="visitors-title">
-    <h2 id="visitors-title">Visitors</h2>
-    <div class="visitors-map" id="visitors-map"></div>
-    <script>
-      // MapMyVisitors widget, coloured from the active theme: co = ocean, cl = land, ct = text.
-      (function () {
-        const v = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim().replace('#', '');
-        const s = document.createElement('script');
-        s.id = 'mapmyvisitors';
-        s.src = 'https://mapmyvisitors.com/map.js?d=4RLKHlP0CVDKaKCU8Bloy8AD7zo4dmVcxvfQ5mmtaj0&w=a'
-          + '&co=' + v('--panel-2') + '&cl=' + v('--map-land') + '&ct=' + v('--text');
-        document.getElementById('visitors-map').appendChild(s);
-      })();
-    </script>
-    <p class="sublabel">Live visitor map by <a href="https://mapmyvisitors.com/" target="_blank" rel="noopener">MapMyVisitors</a>.</p>
-  </section>
 
   <footer>
     DraftKings NBA lineup optimizer — binary integer program (max projected FPPG, $50k cap) solved daily by GitHub Actions.
