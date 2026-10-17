@@ -265,6 +265,35 @@ def _pick_draft_group(mode, lobby_data=None):
     return best_id, draftables_data
 
 
+# In-Game Showdown re-lists a game that already has a pre-game Showdown.
+IN_GAME_SHOWDOWN_IDS = {112}
+
+
+def _slates_to_solve(data, mode=None):
+    """Return [(mode, draft_group)] for every slate a run should solve.
+
+    Captain: every single-game Showdown (pre-game types first, so they win when
+    the caller drops a later group covering the same game). Classic: the
+    largest slate only.
+    """
+    slates = []
+    if mode in (None, "Captain"):
+        showdowns = [
+            dg for dg in _groups_for_mode(data, "Captain")
+            if dg.get("GameCount", 1) in (1, None)
+        ]
+        showdowns.sort(key=lambda dg: (
+            dg.get("GameTypeId") in IN_GAME_SHOWDOWN_IDS, dg["DraftGroupId"]
+        ))
+        slates += [("Captain", dg) for dg in showdowns]
+    if mode in (None, "Classic"):
+        classic = sorted(
+            _groups_for_mode(data, "Classic"), key=lambda dg: -dg.get("GameCount", 0)
+        )
+        slates += [("Classic", dg) for dg in classic[:1]]
+    return slates
+
+
 def _fppg_stat_id(draft_stats):
     return next(
         (s.get("id") for s in draft_stats if s.get("abbr", "").upper() == "FPPG"),

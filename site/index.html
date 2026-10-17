@@ -32,6 +32,8 @@
   }
   nav.tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-top: 20px; }
+  .slate + .slate { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border); }
+  .slate h2 { margin: 0 0 12px; font-size: 17px; }
   .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
   .meta div { background: var(--panel-2); border-radius: 8px; padding: 10px 12px; }
   .meta .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
@@ -200,18 +202,29 @@
       $('goto-history').onclick = e => { e.preventDefault(); showTab('history'); };
       return;
     }
-    const slate = [data.slate, data.teams].filter(Boolean).join(' — ');
-    el.innerHTML = `
+    // Older builds wrote a single slate at the top level.
+    const slates = data.slates || [data];
+    const card = (S) => {
+      const slate = [S.slate, S.teams].filter(Boolean).join(' — ');
+      if (S.status !== 'ok') {
+        return `<section class="slate"><h2>${esc(S.mode)} · ${esc(slate)}</h2>
+          <p class="sublabel">No lineup: ${esc(S.message)} · draft group ${esc(S.draft_group)}</p></section>`;
+      }
+      return `<section class="slate">
+      <h2>${esc(S.mode)} · ${esc(slate)}</h2>
       <div class="meta">
-        <div><div class="k">Mode</div><div class="v">${esc(data.mode)}</div></div>
-        <div><div class="k">Game date</div><div class="v">${esc(data.game_date)}</div></div>
-        <div><div class="k">Projected FPPG</div><div class="v good">${f1(data.total_projected_fppg)}</div></div>
-        <div><div class="k">Salary used</div><div class="v">${fmtMoney(data.total_salary)} <span class="tag">/ ${fmtMoney(data.salary_cap)}</span></div></div>
+        <div><div class="k">Mode</div><div class="v">${esc(S.mode)}</div></div>
+        <div><div class="k">Game date</div><div class="v">${esc(S.game_date)}</div></div>
+        <div><div class="k">Projected FPPG</div><div class="v good">${f1(S.total_projected_fppg)}</div></div>
+        <div><div class="k">Salary used</div><div class="v">${fmtMoney(S.total_salary)} <span class="tag">/ ${fmtMoney(S.salary_cap)}</span></div></div>
       </div>
-      <p class="sublabel">Slate: ${esc(slate)} · draft group ${esc(data.draft_group)} · ${data.player_pool} eligible players${data.oprk_weight ? ' · OPRK weight ' + data.oprk_weight : ''}</p>
-      ${lineupTable(data, false)}
-      <a class="btn" href="${esc(data.lobby_url)}" target="_blank" rel="noopener">Open slate on DraftKings ↗</a>
-      ${data.log ? `<details><summary>Solver log</summary><pre>${esc(data.log)}</pre></details>` : ''}`;
+      <p class="sublabel">Slate: ${esc(slate)} · draft group ${esc(S.draft_group)} · ${S.player_pool} eligible players${S.oprk_weight ? ' · OPRK weight ' + S.oprk_weight : ''}</p>
+      ${lineupTable(S, false)}
+      <a class="btn" href="${esc(S.lobby_url)}" target="_blank" rel="noopener">Open slate on DraftKings ↗</a>
+      ${S.log ? `<details><summary>Solver log</summary><pre>${esc(S.log)}</pre></details>` : ''}
+      </section>`;
+    };
+    el.innerHTML = slates.map(card).join('');
   }
 
   // ── History ───────────────────────────────────────────────────────────

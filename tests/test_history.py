@@ -147,5 +147,46 @@ class SlateTests(unittest.TestCase):
         self.assertEqual(liq._groups_for_mode(data, 'Captain'), [])
 
 
+class AllSlatesTests(unittest.TestCase):
+    def lobby(self):
+        groups = [
+            dict(DraftGroupId=10, GameTypeId=81, GameCount=1),   # Showdown game A
+            dict(DraftGroupId=11, GameTypeId=112, GameCount=1),  # In-Game Showdown of game A
+            dict(DraftGroupId=12, GameTypeId=81, GameCount=1),   # Showdown game B
+            dict(DraftGroupId=13, GameTypeId=81, GameCount=3),   # multi-game Showdown
+            dict(DraftGroupId=20, GameTypeId=70, GameCount=2),
+            dict(DraftGroupId=21, GameTypeId=70, GameCount=5),   # main Classic
+        ]
+        return {'DraftGroups': [g | {'Sport': 'NBA'} for g in groups], 'Contests': []}
+
+    def test_every_single_game_showdown_and_largest_classic(self):
+        picked = [(m, dg['DraftGroupId']) for m, dg in liq._slates_to_solve(self.lobby())]
+        self.assertEqual(picked, [('Captain', 10), ('Captain', 12), ('Captain', 11), ('Classic', 21)])
+        self.assertEqual([dg['DraftGroupId'] for _, dg in liq._slates_to_solve(self.lobby(), 'Classic')], [21])
+
+    def roster(self, game, team_a, team_b):
+        rows = [dict(Position='PG', Name=f'{t}{i}', Salary=5000, AvgPointsPerGame=20.0 + i, OPRK=16,
+                     **{'Roster Position': 'UTIL'}, TeamAbbrev=t, Status='None',
+                     GameDate='2026-10-20', GameId=game)
+                for t in (team_a, team_b) for i in range(4)]
+        return pd.DataFrame(rows)
+
+    def test_build_solves_each_game_once_and_survives_a_failing_slate(self):
+        rosters = {10: self.roster(1, 'BOS', 'DET'), 11: self.roster(1, 'BOS', 'DET'),
+                   12: self.roster(2, 'NYK', 'PHI'), 21: None}
+
+        def fetch(mode, dg, lobby_data=None):
+            if rosters[dg] is None:
+                raise SystemExit('No feasible lineup found')
+            return rosters[dg], dg, '2026-10-20'
+
+        with patch.object(liq, '_api_get', return_value=self.lobby()),              patch.object(liq, 'fetch_roster', side_effect=fetch),              patch.object(liq, '_save_lineup') as save,              contextlib.redirect_stdout(io.StringIO()):
+            data = site_build.build()
+        self.assertEqual(data['status'], 'ok')
+        self.assertEqual([(s['draft_group'], s['status']) for s in data['slates']],
+                         [(10, 'ok'), (12, 'ok'), (21, 'no_lineup')])
+        self.assertEqual([c.args[1] for c in save.call_args_list], [10, 12])
+
+
 if __name__ == '__main__':
     unittest.main()

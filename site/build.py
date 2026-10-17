@@ -1,8 +1,8 @@
 """Build the static data file for the LineupIQ GitHub Pages site.
 
 Reuses the optimizer in ``main.py`` unchanged: fetches the DraftKings lobby,
-auto-selects a mode and slate exactly like ``uv run main.py`` does, solves,
-and writes ``<out>/data/lineup.json`` for ``site/index.html`` to render.
+solves every single-game Showdown plus the main Classic slate, and writes
+``<out>/data/lineup.json`` (a ``slates`` list) for ``site/index.html`` to render.
 ``history.csv`` is also exported to ``<out>/data/history.json`` so the site
 can browse past lineups with projected vs. actual fantasy points.
 
@@ -103,28 +103,19 @@ def review_history():
     return log.getvalue()
 
 
-def build(mode=None, draft_group=None, players_out=(), oprk_weight=0.0, save=True):
-    generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    lobby = liq._api_get(liq.CONTESTS_URL)
-
-    if draft_group is not None:
-        detected = liq._mode_for_draft_group(lobby, draft_group)
-        if detected is None:
-            raise SystemExit(f"Draft group {draft_group} not found in today's lobby.")
-        mode = mode or detected
-    elif mode is None:
-        mode = liq._choose_mode_from_lobby(lobby)
-
-    if mode is None:
-        return {
-            "status": "no_games",
-            "generated_at": generated_at,
-            "message": "No NBA Captain or Classic slates on DraftKings today.",
-        }
-
+def solve_slate(lobby, mode, draft_group, players_out=(), oprk_weight=0.0, save=True,
+                seen_games=None):
+    """Solve one draft group and return its site entry, or None when it covers
+    exactly the same games as a Showdown already in ``seen_games``."""
     log = io.StringIO()
     with redirect_stdout(log):
         df, draft_group, game_date = liq.fetch_roster(mode, draft_group, lobby_data=lobby)
+        # In-Game Showdowns use their own competition ids, so match on teams.
+        game = (game_date, frozenset(df["TeamAbbrev"]) - {""})
+        if seen_games is not None and mode == "Captain" and game[1]:
+            if game in seen_games:
+                return None
+            seen_games.add(game)
         if players_out:
             df = df[~df["Name"].isin(players_out)].reset_index(drop=True)
         teams = liq._teams_from_draftables(
@@ -132,16 +123,12 @@ def build(mode=None, draft_group=None, players_out=(), oprk_weight=0.0, save=Tru
         )
         lineup = liq.MODES[mode](df, oprk_weight=oprk_weight)
         if save and lineup:
-            # Same write-back as the CLI: history.csv keyed by (game_date, draft_group).
+            # Same write-back as the CLI: history.csv keyed by draft_group.
             liq._save_lineup(lineup, draft_group, game_date, oprk_weight)
 
     label, game_count = _slate_info(lobby, draft_group)
-    total_salary = sum(p["salary"] for p in lineup)
-    total_fppg = round(sum(p["projected_fppg"] for p in lineup), 1)
-
     return {
         "status": "ok",
-        "generated_at": generated_at,
         "mode": mode,
         "game_date": game_date,
         "draft_group": draft_group,
@@ -150,14 +137,67 @@ def build(mode=None, draft_group=None, players_out=(), oprk_weight=0.0, save=Tru
         "teams": teams,
         "lobby_url": liq.LOBBY_DRAFT_GROUP_URL.format(group_id=draft_group),
         "salary_cap": liq.SALARY_CAP,
-        "total_salary": total_salary,
-        "total_projected_fppg": total_fppg,
+        "total_salary": sum(p["salary"] for p in lineup),
+        "total_projected_fppg": round(sum(p["projected_fppg"] for p in lineup), 1),
         "players_out": list(players_out),
         "oprk_weight": oprk_weight,
         "player_pool": int(df["Name"].nunique()),
         "lineup": lineup,
         "log": log.getvalue(),
     }
+
+
+def build(mode=None, draft_group=None, players_out=(), oprk_weight=0.0, save=True):
+    """Solve every NBA Showdown game plus the main Classic slate (or just the
+    requested mode / draft group). One failing slate does not block the rest."""
+    generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    lobby = liq._api_get(liq.CONTESTS_URL)
+
+    if draft_group is not None:
+        detected = liq._mode_for_draft_group(lobby, draft_group)
+        if detected is None:
+            raise SystemExit(f"Draft group {draft_group} not found in today's lobby.")
+        slates = [(mode or detected, {"DraftGroupId": draft_group})]
+    else:
+        slates = liq._slates_to_solve(lobby, mode)
+
+    if not slates:
+        return {
+            "status": "no_games",
+            "generated_at": generated_at,
+            "message": "No NBA Captain or Classic slates on DraftKings today.",
+        }
+
+    results, seen_games = [], set()
+    for slate_mode, dg in slates:
+        dg_id = dg["DraftGroupId"]
+        try:
+            entry = solve_slate(
+                lobby, slate_mode, dg_id, players_out, oprk_weight, save, seen_games
+            )
+        except SystemExit as e:  # main.py signals "no feasible lineup" via sys.exit(msg)
+            entry = {"status": "no_lineup", "message": str(e)}
+        except Exception as e:  # network / API failure for this slate only
+            traceback.print_exc()
+            entry = {"status": "error", "message": f"{type(e).__name__}: {e}"}
+        if entry is None:
+            print(f"Skipped draft group {dg_id}: same game as an earlier Showdown")
+            continue
+        if entry["status"] != "ok":
+            label, _ = _slate_info(lobby, dg_id)
+            entry |= {"mode": slate_mode, "draft_group": dg_id, "slate": label}
+            print(f"Draft group {dg_id}: {entry['message']}")
+        results.append(entry)
+
+    if not any(r["status"] == "ok" for r in results):
+        return {
+            "status": "no_games",
+            "generated_at": generated_at,
+            "message": "; ".join(r["message"] for r in results) or "No lineup available today.",
+        }
+    # Earliest games first; Classic after the Showdowns on the same date.
+    results.sort(key=lambda r: (r.get("game_date") or "9999", r["mode"] == "Classic"))
+    return {"status": "ok", "generated_at": generated_at, "slates": results}
 
 
 def build_history():
@@ -268,7 +308,8 @@ def main():
     out = Path(args.out) / "data"
     out.mkdir(parents=True, exist_ok=True)
     (out / "lineup.json").write_text(json.dumps(data, indent=2))
-    print(f"[{data['status']}] wrote {out / 'lineup.json'}")
+    n_slates = sum(s["status"] == "ok" for s in data.get("slates", []))
+    print(f"[{data['status']}] wrote {out / 'lineup.json'} ({n_slates} lineups)")
 
     history = build_history()
     (out / "history.json").write_text(json.dumps(history, indent=2))

@@ -77,6 +77,10 @@ uv run main.py --list-draft-groups
 
 Prints all NBA draft groups with their GameTypeId and game count.
 
+## Website
+
+`site/build.py` (run twice daily by GitHub Actions) solves **every single-game NBA Showdown** plus the **main (largest) Classic slate** on each run, saves each lineup to `history.csv`, and shows them all on the site. In-Game Showdowns that repeat a game already covered are skipped, and a slate that fails to solve does not block the others.
+
 ## Contest Modes
 
 ### Captain (Showdown)
